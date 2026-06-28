@@ -1,0 +1,18 @@
+-follow the Agents.md for the AI behavior guideline
+-build for using primary in Android phone - Galaxy S26 Ultra (optional -to use in iPhone)
+-Establish the App architecture with back up and version management for future continous development.
+-make Claude.md before proceed the work.
+
+App Design
+There are 5 icon as menu to navigate in the lower part of the screen 
+1.menu Exercise - have subcategories: Abs, Back, Bicep, Calf, Chest, Forearm, Leg, Shoulder, Tricep
+	-each body part subcategory - show the workout with work out name, picture and/or video mp4, how to do/technique
+    -has button to add new workout to each body part subcategories/ also function to edit the exist workout
+2.menu Work out (change name to Discipline) - have subcategories: Fitness To-do list, Fitness Note, Bodybuilding, Alarm Reminder, Weight trend recorder
+3.menu Custom (change name to Program) - Contain the program categories ex bodybuilding, bulking, cutting, endurance training - each of them contain list of workout for each day (as the plan for 3-7d/wk) - can add/editfrom the workout available in 1.exercises
+4.History (Change name to Retro) - for tracking and evaluate the previous exercise; to analysis the progressiveness, intensity, duration, Weight monitor for phase of bulk/cut
+5.More (Change name to Setting) - have all setting and info
+
+I upload images files in folder "FitnessApp" for details of this app (there are description of each image in the filename).
+
+I want to use Cowork to plan for the whole picture and work together with Claude design to process this app

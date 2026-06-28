@@ -1,0 +1,8 @@
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+nullable-getter: false
+# Generate into lib/l10n (next to the .arb files) so imports resolve to
+# 'l10n/app_localizations.dart' across Flutter versions.
+synthetic-package: false

@@ -1,0 +1,14 @@
+{
+  "@@locale": "en",
+  "appTitle": "Alef.FiT",
+  "@appTitle": { "description": "Application name" },
+
+  "tabExercise": "Exercises",
+  "tabDiscipline": "Discipline",
+  "tabProgram": "Program",
+  "tabRetro": "Retro",
+  "tabSetting": "Setting",
+
+  "comingSoon": "Coming soon",
+  "@comingSoon": { "description": "Placeholder shown on not-yet-built screens" }
+}

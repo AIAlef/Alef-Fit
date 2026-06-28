@@ -1,0 +1,28 @@
+# --- Repo-root ignore (monorepo: docs + app/) ---
+# The Flutter app has its own app/.gitignore for build artifacts.
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.iml
+
+# Secrets / local config (never commit)
+*.keystore
+*.jks
+key.properties
+google-services.json
+GoogleService-Info.plist
+**/secrets/**
+.env
+.env.*
+
+# Local backups produced by the app during testing
+*.alefbak
+*.zip.bak
+
+# Design references are large; keep them in the repo intentionally,
+# but ignore any scratch exports here:
+/scratch/

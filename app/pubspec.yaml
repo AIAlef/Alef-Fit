@@ -1,0 +1,76 @@
+name: alef_fit
+description: "Alef.FiT — personal fitness & bodybuilding app (offline-first, Android-first)."
+publish_to: "none"
+
+# MAJOR.MINOR.PATCH+BUILD  (BUILD == Android versionCode). See docs/BACKUP_AND_VERSIONING.md
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+# NOTE: version constraints are a known-good starting point. After `flutter pub get`,
+# run `flutter pub upgrade --major-versions` if you want the latest, then re-test.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management / DI
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Navigation
+  go_router: ^14.2.0
+
+  # Local database (offline-first single source of truth)
+  drift: ^2.18.0
+  sqlite3_flutter_libs: ^0.5.20
+  path_provider: ^2.1.3
+  path: ^1.9.0
+
+  # Media
+  video_player: ^2.9.1
+  chewie: ^1.8.1
+  image_picker: ^1.1.2
+  file_picker: ^8.0.6
+
+  # Notifications / alarms
+  flutter_local_notifications: ^17.2.1
+  timezone: ^0.9.4
+
+  # Charts (weight trend / Retro analysis)
+  fl_chart: ^0.68.0
+
+  # Backup (zip export/import → file / share sheet / Drive)
+  archive: ^3.6.1
+  share_plus: ^9.0.0
+
+  # Misc
+  wakelock_plus: ^1.2.5      # keep screen on during a workout
+  intl: ^0.19.0              # date/number formatting (CE/BE)
+  uuid: ^4.4.0               # stable ids for user-created entities
+  collection: ^1.18.0
+
+  # Optional, later milestone (direct Google Drive sync) — keep commented until M3+:
+  # google_sign_in: ^6.2.1
+  # googleapis: ^13.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.11
+  drift_dev: ^2.18.0
+  riverpod_generator: ^2.4.0
+  custom_lint: ^0.6.4
+  riverpod_lint: ^2.3.10
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  generate: true            # enables gen-l10n from lib/l10n/*.arb
+
+  # App-bundled assets (not the user's design references in ../FitnessApp):
+  # assets:
+  #   - assets/images/
