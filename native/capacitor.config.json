@@ -1,0 +1,13 @@
+{
+  "appId": "fit.alef.app",
+  "appName": "Alef.Fit",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#d4af37"
+    }
+  }
+}

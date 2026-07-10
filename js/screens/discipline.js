@@ -694,8 +694,9 @@ Screens.discipline = (function () {
      Same engine, separate module id → separate folders & tags. */
 
   var NOTE_BGS = [
-    ['', 'Plain'], ['lines', 'Lined paper'], ['graph', 'Graph paper'],
-    ['pink', 'Pink'], ['mint', 'Mint'], ['lavender', 'Lavender'], ['cream', 'Cream'], ['sky', 'Sky']
+    ['', 'Plain'], ['lines', 'Lines'], ['graph', 'Graph'],
+    ['poly', 'Poly'], ['tri', 'Mosaic'], ['cube', 'Cubes'],
+    ['hex', 'Hex'], ['steps', 'Steps'], ['wave', 'Waves']
   ];
 
   function renderNotes(el, module, title, parts) {
@@ -703,6 +704,41 @@ Screens.discipline = (function () {
     if (parts[0] === 'f') return noteList(el, module, title, parts[1]);
     return folderHome(el, module, title);
   }
+
+  /* Note body as blocks: [{t:'txt', v}, {t:'img', ref, url?, size, wrap, align}].
+     Legacy notes (plain body + images[]) convert on the fly; stored data is
+     untouched until the user saves. The txt directly after a wrap (Square)
+     image is its SIDE text; the txt after that is the text BELOW the image —
+     so they are never merged together. */
+  function nbEnsureSlots(arr) {
+    if (arr[0] && arr[0].t === 'img') arr.unshift({ t: 'txt', v: '' });
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].t !== 'img') continue;
+      if (!arr[i + 1] || arr[i + 1].t !== 'txt') arr.splice(i + 1, 0, { t: 'txt', v: '' });      // side / after
+      if (arr[i].wrap && (!arr[i + 2] || arr[i + 2].t !== 'txt')) arr.splice(i + 2, 0, { t: 'txt', v: '' });  // below
+    }
+    if (!arr.length) arr.push({ t: 'txt', v: '' });
+    return arr;
+  }
+  function noteBlocks(n) {
+    var src = (n.blocks && n.blocks.length)
+      ? n.blocks.map(function (b) { return Object.assign({}, b); })
+      : [{ t: 'txt', v: n.body || '' }].concat((n.images || []).map(function (u) {
+          return { t: 'img', ref: u, url: u, size: 100, wrap: false };
+        }));
+    var out = [];
+    src.forEach(function (b) {
+      if (b.t === 'img') { out.push(b); return; }
+      var prev = out[out.length - 1], prev2 = out[out.length - 2];
+      var prevIsSide = prev && prev.t === 'txt' && prev2 && prev2.t === 'img' && prev2.wrap;
+      if (prev && prev.t === 'txt' && !prevIsSide) {
+        prev.v = prev.v + (prev.v && b.v ? '\n' : '') + (b.v || '');
+      } else out.push(b);
+    });
+    return nbEnsureSlots(out);
+  }
+
+  function nbImgWidth(b) { return (b.wrap ? Math.min(b.size || 100, 60) : (b.size || 100)) + '%'; }
 
   function folderHome(el, module, title) {
     el.appendChild(UI.header({ title: title, back: '#/discipline' }));
@@ -714,7 +750,7 @@ Screens.discipline = (function () {
       var counts = {};
       notes.forEach(function (n) { counts[n.folderId || ''] = (counts[n.folderId || ''] || 0) + 1; });
 
-      var list = UI.el('<div class="list"></div>');
+      var list = UI.el('<div class="list note-list"></div>');
       var allItem = UI.el('<button class="list-item"><span class="li-thumb">' + UI.icon('note') + '</span>' +
         '<span class="li-main"><span class="li-title">All notes</span><span class="li-sub">' + notes.length + ' notes</span></span>' +
         '<span class="chev">' + UI.icon('chev') + '</span></button>');
@@ -754,7 +790,7 @@ Screens.discipline = (function () {
       if (!notes.length) { pad.appendChild(UI.emptyState('No notes here yet', 'Tap + to write one')); }
       else {
         notes.sort(function (a, b) { return (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt); });
-        var list = UI.el('<div class="list"></div>');
+        var list = UI.el('<div class="list note-list"></div>');
         notes.forEach(function (n) {
           var img0 = (n.images || [])[0];
           var tagStr = (n.tags || []).map(function (id) { return tagName[id]; }).filter(Boolean).join(', ');
@@ -797,22 +833,71 @@ Screens.discipline = (function () {
         pad.appendChild(chips);
       }
       var card = UI.el('<div class="card' + (n.bg ? ' note-bg-' + n.bg : '') + '"></div>');
-      card.appendChild(UI.el('<div style="white-space:pre-wrap">' + UI.esc(n.body || '') + '</div>'));
+      var bw = UI.el('<div class="note-blocks"></div>');
+      var nbs = noteBlocks(n);
+      function nbImg(b) {
+        var src = b.url || b.ref;
+        if (!src) return null;
+        var im = UI.el('<img class="nb-i' + (b.wrap ? ' nb-wrap' : '') + (b.wrap && b.align === 'right' ? ' nb-right' : '') + '" src="' + src + '" alt="">');
+        im.style.width = nbImgWidth(b);
+        im.addEventListener('click', function () { UI.lightbox({ type: 'image', src: src }); });
+        return im;
+      }
+      for (var bi = 0; bi < nbs.length; bi++) {
+        var b = nbs[bi];
+        if (b.t === 'txt') {
+          if (b.v) bw.appendChild(UI.el('<div class="nb-p">' + UI.esc(b.v) + '</div>'));
+          continue;
+        }
+        var im = nbImg(b);
+        if (!im) continue;
+        if (b.wrap && nbs[bi + 1] && nbs[bi + 1].t === 'txt') {
+          // square image + its text form one self-contained group so the
+          // text sits at the image's side and the next group starts below
+          var g = UI.el('<div class="nb-group"></div>');
+          g.appendChild(im);
+          if (nbs[bi + 1].v) g.appendChild(UI.el('<div class="nb-p">' + UI.esc(nbs[bi + 1].v) + '</div>'));
+          bw.appendChild(g);
+          bi++;
+        } else {
+          bw.appendChild(im);
+        }
+      }
+      card.appendChild(bw);
       pad.appendChild(card);
 
-      /* large media, tap → fullscreen */
+      /* videos, tap → fullscreen */
       var mediaWrap = UI.el('<div class="note-media"></div>');
-      (n.images || []).forEach(function (src) {
-        var im = UI.el('<img src="' + src + '" alt="">');
-        im.addEventListener('click', function () { UI.lightbox({ type: 'image', src: src }); });
-        mediaWrap.appendChild(im);
-      });
       (n.videos || []).forEach(function (src) {
         var v = document.createElement('video');
         v.src = src; v.controls = true; v.playsInline = true; v.preload = 'metadata';
         mediaWrap.appendChild(v);
       });
       if (mediaWrap.children.length) pad.appendChild(mediaWrap);
+
+      /* PDF attachments: tap → open, ⬇ → save to device */
+      if ((n.files || []).length) {
+        var fl = UI.el('<div class="list nf-files"></div>');
+        n.files.forEach(function (f) {
+          var row = UI.el('<div class="list-item">' +
+            '<span class="li-thumb">' + UI.icon('file') + '</span>' +
+            '<span class="li-main"><span class="li-title">' + UI.esc(f.name || 'file.pdf') + '</span>' +
+            '<span class="li-sub">PDF — tap to open</span></span>' +
+            '<button class="btn-icon sm" aria-label="save file">' + UI.icon('download') + '</button></div>');
+          function withUrl(cb) {
+            (f.ref && f.ref.slice(0, 5) === 'data:' ? Promise.resolve(f.ref) : DB.mediaUrl(f.ref)).then(function (u) {
+              if (u) cb(u); else UI.toast('File missing');
+            });
+          }
+          row.addEventListener('click', function () { withUrl(function (u) { UI.openDataUrl(u, f.name || 'file.pdf'); }); });
+          row.querySelector('button').addEventListener('click', function (e) {
+            e.stopPropagation();
+            withUrl(function (u) { UI.saveDataUrl(u, f.name || 'file.pdf'); });
+          });
+          fl.appendChild(row);
+        });
+        pad.appendChild(fl);
+      }
 
       var del = UI.el('<button class="btn btn-danger btn-block">' + UI.icon('trash') + ' Delete note</button>');
       del.addEventListener('click', function () {
@@ -835,26 +920,34 @@ Screens.discipline = (function () {
         UI.field('Title', '<input type="text" id="nf-title" value="' + UI.esc(n.title) + '">') +
         UI.field('Folder', '<select id="nf-folder">' + folderOpts + '</select>') +
         '<div class="field"><span class="field-label">Background template</span><div id="nf-bgs"></div></div>' +
-        UI.field('Note', '<textarea id="nf-body" style="min-height:140px" class="' + (n.bg ? 'note-bg-' + n.bg : '') + '">' + UI.esc(n.body) + '</textarea>') +
+        '<div class="field"><span class="field-label">Note</span>' +
+        '<div id="nf-blocks" class="nf-blocks' + (n.bg ? ' note-bg-' + n.bg : '') + '"></div>' +
+        '<button class="btn" type="button" id="nf-add-img" style="margin-top:8px">' + UI.icon('camera') + ' Add image / video</button>' +
+        '<input type="file" id="nf-file" accept="image/*,video/mp4" class="hidden" multiple></div>' +
+        '<div class="field" id="nf-vid-field"><span class="field-label">Videos (mp4) — tap to remove</span>' +
+        '<div class="media-strip" id="nf-vids"></div></div>' +
+        '<div class="field"><span class="field-label">Files (PDF)</span>' +
+        '<div class="list nf-files" id="nf-files"></div>' +
+        '<button class="btn" type="button" id="nf-add-pdf">' + UI.icon('file') + ' Attach PDF</button>' +
+        '<input type="file" id="nf-pdf" accept="application/pdf,.pdf" class="hidden" multiple></div>' +
         '<div class="field"><span class="field-label">Tags</span><div id="nf-tags"></div></div>' +
-        '<label class="switch"><span>Pin to top</span><input type="checkbox" id="nf-pin"' + (n.pinned ? ' checked' : '') + '></label>' +
-        '<div class="field"><span class="field-label">Images & videos (mp4)</span>' +
-        '<div class="media-strip" id="nf-imgs"></div>' +
-        '<button class="btn" type="button" id="nf-add-img">' + UI.icon('camera') + ' Add image/video</button>' +
-        '<input type="file" id="nf-file" accept="image/*,video/mp4" class="hidden" multiple></div></div>');
+        '<label class="switch"><span>Pin to top</span><input type="checkbox" id="nf-pin"' + (n.pinned ? ' checked' : '') + '></label></div>');
 
-      /* background template swatches */
+      /* background template picker — labeled swatch grid */
       var bgSel = n.bg || '';
       var bgWrap = body.querySelector('#nf-bgs');
+      bgWrap.className = 'bgpick';
       NOTE_BGS.forEach(function (b) {
-        var sw = UI.el('<button type="button" class="bg-swatch' + (b[0] ? ' note-bg-' + b[0] : '') + (bgSel === b[0] ? ' on' : '') + '" title="' + b[1] + '"></button>');
-        sw.addEventListener('click', function () {
+        var it = UI.el('<button type="button" class="bgpick-item' + (bgSel === b[0] ? ' on' : '') + '">' +
+          '<span class="bgpick-sw' + (b[0] ? ' note-bg-' + b[0] : ' bgpick-plain') + '"></span>' +
+          '<span class="bgpick-name">' + b[1] + '</span></button>');
+        it.addEventListener('click', function () {
           bgSel = b[0];
-          bgWrap.querySelectorAll('.bg-swatch').forEach(function (x) { x.classList.remove('on'); });
-          sw.classList.add('on');
-          body.querySelector('#nf-body').className = bgSel ? 'note-bg-' + bgSel : '';
+          bgWrap.querySelectorAll('.bgpick-item').forEach(function (x) { x.classList.remove('on'); });
+          it.classList.add('on');
+          body.querySelector('#nf-blocks').className = 'nf-blocks' + (bgSel ? ' note-bg-' + bgSel : '');
         });
-        bgWrap.appendChild(sw);
+        bgWrap.appendChild(it);
       });
 
       var selTags = (n.tags || []).slice();
@@ -870,16 +963,140 @@ Screens.discipline = (function () {
         tagWrap.appendChild(chip);
       });
 
-      var images = (n.images || []).slice();
+      /* ---- note body: text + inline image blocks (iPhone-Notes style) ---- */
+      var blocks = noteBlocks(n);
+      var lastTxt = null, lastSel = null;   // where "Add image" inserts
+
+      function grow(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = Math.max(44, ta.scrollHeight) + 'px';
+      }
+
+      function mkTa(b, i) {
+        var ta = document.createElement('textarea');
+        ta.className = 'nb-txt';
+        ta.value = b.v || '';
+        if (i === 0) ta.placeholder = 'Write…';
+        ta.addEventListener('input', function () { b.v = ta.value; grow(ta); });
+        ['input', 'focus', 'blur', 'click', 'keyup', 'select'].forEach(function (ev) {
+          ta.addEventListener(ev, function () { lastTxt = b; lastSel = ta.selectionStart; });
+        });
+        return ta;
+      }
+
+      function imgCard(b) {
+        var right = b.wrap && b.align === 'right';
+        if (b.wrap && (b.size || 100) > 60) b.size = 60;   // square is capped at 60%
+        var card = UI.el('<div class="nb-imgcard">' +
+          '<div class="nb-row' + (right ? ' right' : '') + '"><img class="nb-i' + (b.wrap ? ' nb-wrap' : '') + '" src="' + (b.url || b.ref) + '" alt=""></div>' +
+          '<div class="nb-tools">' +
+          '<span class="nb-mode"><button type="button" data-m="full"' + (b.wrap ? '' : ' class="on"') + '>Full</button>' +
+          '<button type="button" data-m="wrap"' + (b.wrap ? ' class="on"' : '') + '>Square</button></span>' +
+          (b.wrap ? '<span class="nb-mode nb-align"><button type="button" data-g="left"' + (right ? '' : ' class="on"') + '>◧ Lt</button>' +
+          '<button type="button" data-g="right"' + (right ? ' class="on"' : '') + '>Rt ◨</button></span>' : '') +
+          '<input type="range" min="25" max="' + (b.wrap ? 60 : 100) + '" step="5" value="' + (b.size || 100) + '" aria-label="image size">' +
+          '<span class="nb-size">' + (b.size || 100) + '%</span>' +
+          '<button type="button" class="btn-icon sm" data-a="save" aria-label="save image">' + UI.icon('download') + '</button>' +
+          '<button type="button" class="btn-icon sm" data-a="del" aria-label="remove image">' + UI.icon('trash') + '</button>' +
+          '</div></div>');
+        var im = card.querySelector('img');
+        im.style.width = nbImgWidth(b);
+        function syncRow() {   // side text field is at least as tall as the image
+          var ta = card.querySelector('.nb-row .nb-txt');
+          if (ta && im.offsetHeight) ta.style.minHeight = im.offsetHeight + 'px';
+        }
+        im.addEventListener('load', syncRow);
+        card.querySelectorAll('.nb-mode:not(.nb-align) button').forEach(function (x) {
+          x.addEventListener('click', function () {
+            b.wrap = x.dataset.m === 'wrap';
+            drawBlocks();      // layout changes between stacked and side-by-side
+          });
+        });
+        card.querySelectorAll('.nb-align button').forEach(function (x) {
+          x.addEventListener('click', function () {
+            b.align = x.dataset.g;
+            card.querySelector('.nb-row').classList.toggle('right', b.align === 'right');
+            card.querySelectorAll('.nb-align button').forEach(function (y) {
+              y.classList.toggle('on', y.dataset.g === b.align);
+            });
+          });
+        });
+        var range = card.querySelector('input[type=range]');
+        range.addEventListener('input', function () {
+          b.size = parseInt(range.value, 10);
+          card.querySelector('.nb-size').textContent = b.size + '%';
+          im.style.width = nbImgWidth(b);
+          syncRow();
+        });
+        card.querySelector('[data-a=save]').addEventListener('click', function () { UI.saveImage(b.url || b.ref); });
+        card.querySelector('[data-a=del]').addEventListener('click', function () {
+          var i = blocks.indexOf(b);
+          if (i < 0) return;
+          blocks.splice(i, 1);
+          var prev = blocks[i - 1], next = blocks[i];
+          if (prev && next && prev.t === 'txt' && next.t === 'txt') {
+            prev.v = prev.v + (prev.v && next.v ? '\n' : '') + (next.v || '');
+            blocks.splice(i, 1);
+            if (lastTxt === next) lastTxt = prev;
+          }
+          drawBlocks();
+        });
+        card.syncRow = syncRow;
+        return card;
+      }
+
+      function drawBlocks() {
+        nbEnsureSlots(blocks);   // side + below slots survive toggles/deletes
+        var wrap = body.querySelector('#nf-blocks');
+        wrap.innerHTML = '';
+        for (var i = 0; i < blocks.length; i++) {
+          var b = blocks[i];
+          if (b.t === 'txt') {
+            var ta = mkTa(b, i);
+            wrap.appendChild(ta);
+            grow(ta);
+            continue;
+          }
+          var card = imgCard(b);
+          wrap.appendChild(card);
+          if (b.wrap && blocks[i + 1] && blocks[i + 1].t === 'txt') {
+            // Square mode: type right beside the image — the next text block
+            // moves into the image row
+            var side = mkTa(blocks[i + 1], i + 1);
+            card.querySelector('.nb-row').appendChild(side);
+            grow(side);
+            card.syncRow();
+            i++;
+          }
+        }
+      }
+      drawBlocks();
+      setTimeout(function () {
+        body.querySelectorAll('.nb-txt').forEach(grow);   // re-measure once in the DOM
+      }, 0);
+
+      function insertImage(d) {
+        var nb = { t: 'img', ref: d, url: d, size: 100, wrap: false };
+        var i = blocks.indexOf(lastTxt);
+        if (i < 0) {                    // no cursor known → append at the end
+          blocks.push(nb, { t: 'txt', v: '' });
+        } else {                        // split the focused text at the cursor
+          var v = lastTxt.v || '';
+          var pos = (lastSel == null) ? v.length : Math.min(lastSel, v.length);
+          var tail = { t: 'txt', v: v.slice(pos) };
+          lastTxt.v = v.slice(0, pos);
+          blocks.splice(i + 1, 0, nb, tail);
+          lastTxt = tail; lastSel = 0;
+        }
+        drawBlocks();
+      }
+
+      /* ---- videos keep the tap-to-remove strip ---- */
       var videos = (n.videos || []).slice();
       function drawMedia() {
-        var strip = body.querySelector('#nf-imgs');
+        var strip = body.querySelector('#nf-vids');
         strip.innerHTML = '';
-        images.forEach(function (src, i) {
-          var im = UI.el('<img src="' + src + '" alt="" title="Tap to remove">');
-          im.addEventListener('click', function () { images.splice(i, 1); drawMedia(); });
-          strip.appendChild(im);
-        });
+        body.querySelector('#nf-vid-field').style.display = videos.length ? '' : 'none';
         videos.forEach(function (src, i) {
           var v = document.createElement('video');
           v.src = src; v.title = 'Tap to remove'; v.muted = true;
@@ -888,13 +1105,49 @@ Screens.discipline = (function () {
         });
       }
       drawMedia();
+
+      /* ---- PDF attachments ---- */
+      var files = (n.files || []).map(function (f) { return Object.assign({}, f); });
+      function fmtSize(bytes) {
+        if (!bytes) return '';
+        return bytes > 1048576 ? (bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+      }
+      function drawFiles() {
+        var wrap = body.querySelector('#nf-files');
+        wrap.innerHTML = '';
+        files.forEach(function (f, i) {
+          var row = UI.el('<div class="list-item">' +
+            '<span class="li-thumb">' + UI.icon('file') + '</span>' +
+            '<span class="li-main"><span class="li-title">' + UI.esc(f.name || 'file.pdf') + '</span>' +
+            '<span class="li-sub">PDF' + (f.size ? ' · ' + fmtSize(f.size) : '') + '</span></span>' +
+            '<button type="button" class="btn-icon sm" aria-label="remove file">' + UI.icon('trash') + '</button></div>');
+          row.querySelector('button').addEventListener('click', function () { files.splice(i, 1); drawFiles(); });
+          wrap.appendChild(row);
+        });
+      }
+      drawFiles();
+      body.querySelector('#nf-add-pdf').addEventListener('click', function () { body.querySelector('#nf-pdf').click(); });
+      body.querySelector('#nf-pdf').addEventListener('change', function (e) {
+        Array.prototype.forEach.call(e.target.files, function (f) {
+          if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) { UI.toast(f.name + ' is not a PDF'); return; }
+          UI.fileToDataUrl(f).then(function (d) {
+            files.push({ ref: d, name: f.name, size: f.size });
+            drawFiles();
+          }).catch(function () { UI.toast('Could not read ' + f.name); });
+        });
+        e.target.value = '';
+      });
+
       body.querySelector('#nf-add-img').addEventListener('click', function () { body.querySelector('#nf-file').click(); });
       body.querySelector('#nf-file').addEventListener('change', function (e) {
+        var chain = Promise.resolve();
         Array.prototype.forEach.call(e.target.files, function (f) {
-          UI.fileToDataUrl(f).then(function (d) {
-            if (/^video\//.test(f.type)) videos.push(d); else images.push(d);
-            drawMedia();
-          }).catch(function () { UI.toast('Could not read ' + f.name); });
+          chain = chain.then(function () {
+            return UI.fileToDataUrl(f).then(function (d) {
+              if (/^video\//.test(f.type)) { videos.push(d); drawMedia(); }
+              else insertImage(d);
+            }).catch(function () { UI.toast('Could not read ' + f.name); });
+          });
         });
         e.target.value = '';
       });
@@ -905,13 +1158,36 @@ Screens.discipline = (function () {
           label: 'Save', primary: true, onClick: function (close) {
             n.title = body.querySelector('#nf-title').value.trim();
             n.folderId = body.querySelector('#nf-folder').value || null;
-            n.body = body.querySelector('#nf-body').value;
             n.tags = selTags;
             n.pinned = body.querySelector('#nf-pin').checked;
             n.bg = bgSel;
-            Promise.all([DB.internUrlList(images, 'image'), DB.internUrlList(videos, 'video')]).then(function (r2) {
-              n.images = r2[0];
+            var kept = blocks.filter(function (b, bi) {
+              if (b.t === 'img' || (b.v || '').trim() !== '') return true;
+              var prev = blocks[bi - 1];   // keep an empty SIDE slot so the
+              return !!(prev && prev.t === 'img' && prev.wrap);   // below text stays below
+            });
+            Promise.all([
+              Promise.all(kept.map(function (b) {
+                if (b.t !== 'img') return Promise.resolve({ t: 'txt', v: b.v });
+                var stored = { t: 'img', ref: b.ref, size: b.size || 100, wrap: !!b.wrap, align: b.align === 'right' ? 'right' : 'left' };
+                if (b.ref && b.ref.slice(0, 5) === 'data:') {
+                  return DB.internMedia(b.ref, 'image').then(function (id) { stored.ref = id; return stored; });
+                }
+                return Promise.resolve(stored);
+              })),
+              DB.internUrlList(videos, 'video'),
+              Promise.all(files.map(function (f) {
+                if (f.ref && f.ref.slice(0, 5) === 'data:') {
+                  return DB.internMedia(f.ref, 'pdf').then(function (id) { return { ref: id, name: f.name, size: f.size }; });
+                }
+                return Promise.resolve({ ref: f.ref, name: f.name, size: f.size });
+              }))
+            ]).then(function (r2) {
+              n.blocks = r2[0];
               n.videos = r2[1];
+              n.files = r2[2];
+              n.images = r2[0].filter(function (b) { return b.t === 'img'; }).map(function (b) { return b.ref; });
+              n.body = r2[0].filter(function (b) { return b.t === 'txt' && b.v; }).map(function (b) { return b.v; }).join('\n');
               return DB.put('notes', n);
             }).then(function () { UI.toast('Saved'); close(); onSaved && onSaved(n); });
           }
@@ -924,11 +1200,12 @@ Screens.discipline = (function () {
 
   var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+  function resyncNativeAlarms() { if (window.Native) Native.syncAlarms(); }
+
   function renderAlarm(el) {
     el.appendChild(UI.header({ title: 'Alarm Reminder', back: '#/discipline' }));
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
-    pad.appendChild(UI.el('<div class="card"><div class="sub">Alarms ring while the app is open. Background alarms arrive with the native (APK) version — see Roadmap.</div></div>'));
     var wrap = UI.el('<div></div>');
     pad.appendChild(wrap);
 
@@ -937,17 +1214,22 @@ Screens.discipline = (function () {
       DB.all('alarms').then(function (rows) {
         if (!rows.length) { wrap.appendChild(UI.emptyState('No alarms', 'Tap + to add one')); return; }
         rows.sort(function (a, b) { return a.time.localeCompare(b.time); });
-        var list = UI.el('<div class="list"></div>');
+        var list = UI.el('<div class="list alarm-list"></div>');
         rows.forEach(function (a) {
           var daysStr = (a.days && a.days.length) ? a.days.map(function (d) { return DAYS[d]; }).join(' ') : 'Every day';
           var it = UI.el('<div class="list-item">' +
             '<span class="li-main"><span class="li-title" style="font-size:1.3rem">' + a.time + '</span>' +
             '<span class="li-sub">' + UI.esc(a.label || '') + (a.label ? ' · ' : '') + daysStr + '</span></span>' +
-            '<label class="switch" style="padding:0"><input type="checkbox"' + (a.enabled ? ' checked' : '') + '></label>' +
+            '<label class="switch"><input type="checkbox"' + (a.enabled ? ' checked' : '') + '></label>' +
             '<button class="btn-icon" aria-label="delete">' + UI.icon('trash') + '</button></div>');
-          it.querySelector('input').addEventListener('change', function (e) { a.enabled = e.target.checked; DB.put('alarms', a); });
+          it.querySelector('input').addEventListener('change', function (e) {
+            a.enabled = e.target.checked;
+            DB.put('alarms', a).then(resyncNativeAlarms);
+          });
           it.querySelector('.btn-icon').addEventListener('click', function () {
-            UI.confirm('Delete this alarm?', 'Delete').then(function (ok) { if (ok) DB.del('alarms', a.id).then(draw); });
+            UI.confirm('Delete this alarm?', 'Delete').then(function (ok) {
+              if (ok) DB.del('alarms', a.id).then(function () { resyncNativeAlarms(); draw(); });
+            });
           });
           it.querySelector('.li-main').addEventListener('click', function () { alarmForm(a, draw); });
           list.appendChild(it);
@@ -985,6 +1267,7 @@ Screens.discipline = (function () {
           a.days = sel.sort();
           DB.put('alarms', a).then(function () {
             askNotifPermission();
+            resyncNativeAlarms();
             UI.toast('Saved'); close(); onSaved && onSaved();
           });
         }

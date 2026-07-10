@@ -215,7 +215,12 @@ var DB = (function () {
     })).then(function (r) { return r.filter(Boolean); });
   }
   function hydrateNote(n) {
-    return Promise.all([hydrateUrlList(n.images), hydrateUrlList(n.videos)]).then(function (r) {
+    var blocks = Promise.all((n.blocks || []).map(function (b) {
+      if (b.t !== 'img' || !b.ref) return Promise.resolve();
+      if (b.ref.slice(0, 5) === 'data:') { b.url = b.ref; return Promise.resolve(); }
+      return mediaUrl(b.ref).then(function (u) { b.url = u; });
+    }));
+    return Promise.all([hydrateUrlList(n.images), hydrateUrlList(n.videos), blocks]).then(function (r) {
       n.images = r[0];
       n.videos = r[1];
       return n;
@@ -261,6 +266,12 @@ var DB = (function () {
       r[1].forEach(function (n) {
         (n.images || []).concat(n.videos || []).forEach(function (v) {
           if (v && v.slice(0, 5) !== 'data:') refs[v] = 1;
+        });
+        (n.blocks || []).forEach(function (b) {
+          if (b.t === 'img' && b.ref && b.ref.slice(0, 5) !== 'data:') refs[b.ref] = 1;
+        });
+        (n.files || []).forEach(function (f) {
+          if (f.ref && f.ref.slice(0, 5) !== 'data:') refs[f.ref] = 1;
         });
       });
       var dead = r[2].filter(function (m) { return !refs[m.id]; });

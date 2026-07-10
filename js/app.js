@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.14.2';
+var APP_VERSION = '0.18.0';
 
 var App = (function () {
 
@@ -134,6 +134,7 @@ var App = (function () {
         }
         route();
         if (seeded) UI.toast('Starter library loaded: ' + (window.SEED_EXERCISES || []).length + ' exercises');
+        if (window.Native) Native.init();   // APK: schedule real background alarms
         setInterval(tickAlerts, 20000);
         setTimeout(function () { DB.gcMedia(); }, 4000);
         if (window.matchMedia) {

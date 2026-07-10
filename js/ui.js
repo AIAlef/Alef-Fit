@@ -53,7 +53,8 @@ var UI = (function () {
     funnel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg>',
     sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h8M16 6h4M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="14" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
     stack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/></svg>',
-    dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>'
+    dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>',
+    file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>'
   };
   function icon(name, cls) { return '<span class="icon ' + (cls || '') + '">' + (I[name] || '') + '</span>'; }
 
@@ -170,6 +171,48 @@ var UI = (function () {
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+
+  /* dataURL → Blob (null when malformed) */
+  function dataUrlToBlob(dataUrl) {
+    var m = /^data:([^;,]+)/.exec(dataUrl || '');
+    if (!m) return null;
+    try {
+      var raw = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+      var bin = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bin[i] = raw.charCodeAt(i);
+      return new Blob([bin], { type: m[1] });
+    } catch (e) { return null; }
+  }
+
+  /* Save any dataURL to the device as a real file (Downloads). */
+  function saveDataUrl(dataUrl, filename) {
+    var blob = dataUrlToBlob(dataUrl);
+    if (!blob) { toast('Could not save file'); return; }
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    toast('Saved ' + filename);
+  }
+
+  /* Open a dataURL (e.g. PDF) in a new tab; falls back to download. */
+  function openDataUrl(dataUrl, filename) {
+    var blob = dataUrlToBlob(dataUrl);
+    if (!blob) { toast('Could not open file'); return; }
+    var u = URL.createObjectURL(blob);
+    var w = window.open(u, '_blank');
+    if (!w) saveDataUrl(dataUrl, filename || 'file');
+    setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+  }
+
+  function saveImage(dataUrl) {
+    var m = /^data:image\/([a-z0-9+.-]+)/i.exec(dataUrl || '');
+    if (!m) { toast('Could not save image'); return; }
+    var ext = m[1] === 'jpeg' ? 'jpg' : m[1].replace(/[^a-z0-9]/gi, '');
+    saveDataUrl(dataUrl, 'alef-fit-' + DB.todayISO() + '-' + Date.now().toString(36) + '.' + ext);
   }
 
   /* Simple SVG line chart for weight/volume trends. */
@@ -331,6 +374,9 @@ var UI = (function () {
       if (pr && pr.catch) pr.catch(function () { /* autoplay blocked */ });
     } else {
       w.appendChild(el('<img src="' + m.src + '" alt="">'));
+      var sv = el('<button class="lightbox-save" aria-label="save image">' + icon('download') + ' Save</button>');
+      sv.addEventListener('click', function (e) { e.stopPropagation(); saveImage(m.src); });
+      w.appendChild(sv);
     }
     var x = el('<button class="lightbox-x" aria-label="close">✕</button>');
     w.appendChild(x);
@@ -345,7 +391,8 @@ var UI = (function () {
     fmtDate: fmtDate, fmtDateTime: fmtDateTime,
     header: header, emptyState: emptyState, fab: fab, toast: toast,
     modal: modal, confirm: confirmDlg, field: field, cropWrap: cropWrap,
-    fileToDataUrl: fileToDataUrl, download: download, lineChart: lineChart,
+    fileToDataUrl: fileToDataUrl, download: download, saveImage: saveImage,
+    saveDataUrl: saveDataUrl, openDataUrl: openDataUrl, lineChart: lineChart,
     recTable: recTable, pickExercise: pickExercise, lightbox: lightbox, recPastRow: recPastRow
   };
 })();

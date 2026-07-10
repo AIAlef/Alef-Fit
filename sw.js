@@ -1,9 +1,9 @@
 /* Alef.Fit service worker — cache-first app shell for offline use.
    Bump CACHE on every release (matches APP_VERSION). */
-var CACHE = 'alef-fit-v0.14.2';
+var CACHE = 'alef-fit-v0.18.0';
 var ASSETS = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
-  './js/db.js', './js/ui.js', './js/seed-data.js', './js/sync.js', './js/devtext.js', './js/app.js',
+  './js/db.js', './js/native.js', './js/ui.js', './js/seed-data.js', './js/sync.js', './js/devtext.js', './js/app.js',
   './js/screens/exercise.js', './js/screens/discipline.js',
   './js/screens/program.js', './js/screens/retro.js', './js/screens/setting.js',
   './assets/icons/icon-192.png', './assets/icons/icon-512.png',
