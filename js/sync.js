@@ -1,0 +1,421 @@
+/* Alef.Fit — Google Drive sync (hidden appDataFolder).
+   Flow per "Sync now": pull remote alef-sync.json → merge into local DB
+   (LWW + tombstones) → push merged data back → exchange media blobs by
+   content hash (upload missing there, download missing here) → trim remote
+   blobs nothing references anymore.
+   Needs a Google OAuth client id (Setting → Sync); loads Google's sign-in
+   script only when the user taps Sync — the rest of the app stays offline. */
+'use strict';
+
+window.Sync = (function () {
+  var SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  var SCOPE_FILE = 'https://www.googleapis.com/auth/drive.file';
+  /* the Claude share file is visible → needs drive.file too; only ask when on */
+  function scopes() {
+    var st = DB.getSettings() || {};
+    return SCOPE + (st.claudeShareOn ? ' ' + SCOPE_FILE : '');
+  }
+  var API = 'https://www.googleapis.com/drive/v3/';
+  var UPLOAD = 'https://www.googleapis.com/upload/drive/v3/';
+  var SYNC_NAME = 'alef-sync.json';
+  var _token = null, _tokenExp = 0;
+  var _busy = false, _touchTimer = null, _autoBound = false;
+
+  function loadGis() {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client';
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Could not load Google sign-in — are you online?')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  /* Auth = authorization-code flow (Google blocks the old implicit/token
+     flow for OAuth clients created after 2025). First sync opens a Google
+     popup once; the refresh token is kept locally so later syncs are
+     silent. Needs client ID + client secret from the Cloud Console. */
+  function creds() {
+    var st = DB.getSettings() || {};
+    return { id: (st.gdriveClientId || '').trim(), secret: (st.gdriveClientSecret || '').trim() };
+  }
+
+  function tokenPost(params) {
+    return fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: Object.keys(params).map(function (k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      }).join('&')
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error('Google token error: ' + (j.error_description || j.error || r.status));
+        return j;
+      });
+    });
+  }
+
+  var REDIRECT_NATIVE = 'https://aialef.github.io/Alef-Fit/oauth.html';
+
+  function storeTok(tok) {
+    _token = tok.access_token;
+    _tokenExp = Date.now() + (tok.expires_in || 3600) * 1000;
+    if (tok.refresh_token) {
+      return DB.putRaw('meta', { key: 'gdriveRefreshToken', value: tok.refresh_token })
+        .then(function () { return _token; });
+    }
+    return _token;
+  }
+
+  /* APK path: Google refuses OAuth inside WebViews — open the system
+     browser, land on oauth.html (shows the code), user pastes it back. */
+  function nativeInteractive() {
+    var c = creds();
+    var url = 'https://accounts.google.com/o/oauth2/v2/auth' +
+      '?client_id=' + encodeURIComponent(c.id) +
+      '&redirect_uri=' + encodeURIComponent(REDIRECT_NATIVE) +
+      '&response_type=code&access_type=offline&prompt=consent' +
+      '&scope=' + encodeURIComponent(scopes());
+    var opener = (window.Native && window.Native.openExternal)
+      ? window.Native.openExternal(url)
+      : Promise.resolve(false);
+    return opener.then(function () {
+      return new Promise(function (resolve, reject) {
+        var body = UI.el('<div><p class="sub">Google opened in your browser. Approve access there — it will show a CODE. Copy it and paste here:</p>' +
+          UI.field('Code from Google', '<input type="text" id="oa-code" autocomplete="off" autocapitalize="off">') + '</div>');
+        UI.modal('Google sign-in', body, [
+          { label: 'Cancel', onClick: function (close) { close(); reject(new Error('Sign-in cancelled')); } },
+          {
+            label: 'Connect', primary: true, onClick: function (close) {
+              var v = body.querySelector('#oa-code').value.trim();
+              if (!v) return;
+              close();
+              resolve(v);
+            }
+          }
+        ]);
+      });
+    }).then(function (code) {
+      return tokenPost({
+        code: code, client_id: c.id, client_secret: c.secret,
+        redirect_uri: REDIRECT_NATIVE, grant_type: 'authorization_code'
+      });
+    }).then(storeTok);
+  }
+
+  function interactiveCode() {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+      return nativeInteractive();
+    }
+    var c = creds();
+    return loadGis().then(function () {
+      return new Promise(function (resolve, reject) {
+        var cc = window.google.accounts.oauth2.initCodeClient({
+          client_id: c.id,
+          scope: scopes(),
+          ux_mode: 'popup',
+          callback: function (resp) {
+            if (resp && resp.code) resolve(resp.code);
+            else reject(new Error('Google sign-in was cancelled'));
+          },
+          error_callback: function (e) {
+            reject(new Error('Google sign-in failed' + (e && e.type ? ': ' + e.type : '')));
+          }
+        });
+        cc.requestCode();
+      });
+    }).then(function (code) {
+      return tokenPost({
+        code: code, client_id: c.id, client_secret: c.secret,
+        redirect_uri: 'postmessage', grant_type: 'authorization_code'
+      });
+    }).then(function (tok) {
+      _token = tok.access_token;
+      _tokenExp = Date.now() + (tok.expires_in || 3600) * 1000;
+      if (tok.refresh_token) {
+        return DB.putRaw('meta', { key: 'gdriveRefreshToken', value: tok.refresh_token })
+          .then(function () { return _token; });
+      }
+      return _token;
+    });
+  }
+
+  function getToken() {
+    if (_token && Date.now() < _tokenExp - 60000) return Promise.resolve(_token);
+    var c = creds();
+    if (!c.id || !c.secret) return Promise.reject(new Error('Set the Google client ID and secret in Setting → Google Drive sync'));
+    return DB.get('meta', 'gdriveRefreshToken').then(function (row) {
+      if (!row || !row.value) return interactiveCode();
+      return tokenPost({
+        client_id: c.id, client_secret: c.secret,
+        refresh_token: row.value, grant_type: 'refresh_token'
+      }).then(function (tok) {
+        _token = tok.access_token;
+        _tokenExp = Date.now() + (tok.expires_in || 3600) * 1000;
+        return _token;
+      }).catch(function () {
+        /* refresh token revoked/expired → one interactive round */
+        return interactiveCode();
+      });
+    });
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ Authorization: 'Bearer ' + _token }, opts.headers || {});
+    return fetch((opts.upload ? UPLOAD : API) + path, opts).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          throw new Error('Drive error ' + r.status + ': ' + t.slice(0, 180));
+        });
+      }
+      return opts.raw ? r : r.json();
+    });
+  }
+
+  function findFile(name) {
+    return api('files?spaces=appDataFolder&q=' + encodeURIComponent("name='" + name + "'") +
+      '&fields=files(id,name,modifiedTime)&pageSize=1').then(function (r) {
+      return (r.files || [])[0] || null;
+    });
+  }
+
+  function download(id) {
+    return api('files/' + id + '?alt=media', { raw: true }).then(function (r) { return r.json(); });
+  }
+
+  function uploadJson(name, existingId, obj, parent) {
+    var meta = existingId ? {} : { name: name, parents: [parent || 'appDataFolder'] };
+    var boundary = 'alefb' + Date.now().toString(36);
+    var payload = '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(meta) + '\r\n--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' +
+      JSON.stringify(obj) + '\r\n--' + boundary + '--';
+    return api('files' + (existingId ? '/' + existingId : '') + '?uploadType=multipart', {
+      method: existingId ? 'PATCH' : 'POST',
+      upload: true,
+      headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+      body: payload
+    });
+  }
+
+  function listMedia() {
+    var out = [];
+    function page(tok) {
+      return api('files?spaces=appDataFolder&q=' + encodeURIComponent("name contains 'media-'") +
+        '&fields=nextPageToken,files(id,name)&pageSize=1000' + (tok ? '&pageToken=' + tok : ''))
+        .then(function (r) {
+          out = out.concat(r.files || []);
+          return r.nextPageToken ? page(r.nextPageToken) : out;
+        });
+    }
+    return page(null);
+  }
+
+  /* ---- Claude share: visible Drive copy for the AI secretary ----
+     Folder "Alef.Fit" in My Drive, file alef-fit-claude-share.json —
+     filtered data only (DB.buildClaudeShare), created/updated after each
+     sync while Setting → Share with Claude is on. With drive.file scope
+     the app only ever sees files it created itself. */
+  var SHARE_FOLDER = 'Alef.Fit';
+  var SHARE_NAME = 'alef-fit-claude-share.json';
+  var INBOX_NAME = 'alef-fit-claude-inbox.json';
+
+  function findVisible(q) {
+    return api('files?q=' + encodeURIComponent(q + ' and trashed=false') +
+      '&fields=files(id,name)&pageSize=1').then(function (r) {
+      return (r.files || [])[0] || null;
+    });
+  }
+
+  function pushClaudeShare() {
+    var folderId;
+    return findVisible("name='" + SHARE_FOLDER + "' and mimeType='application/vnd.google-apps.folder'")
+      .then(function (f) {
+        if (f) return f;
+        return api('files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: SHARE_FOLDER, mimeType: 'application/vnd.google-apps.folder' })
+        });
+      })
+      .then(function (f) {
+        folderId = f.id;
+        return findVisible("name='" + SHARE_NAME + "' and '" + folderId + "' in parents");
+      })
+      .then(function (f) {
+        return DB.buildClaudeShare().then(function (data) {
+          return uploadJson(SHARE_NAME, f ? f.id : null, data, folderId);
+        });
+      })
+      .then(function () {
+        /* Claude suggestions inbox: app-created so the app may read it;
+           Claude UPDATES this file with suggestion batches. Read + convert
+           to proposals, then acknowledge so a batch imports only once. */
+        if ((DB.getSettings() || {}).claudeInboxOn === false) return;
+        return findVisible("name='" + INBOX_NAME + "' and '" + folderId + "' in parents")
+          .then(function (f) {
+            if (!f) {
+              return uploadJson(INBOX_NAME, null, {
+                app: 'alef.fit-claude-inbox',
+                note: 'Claude secretary: write suggestion batches here (docs/CLAUDE-INBOX.md). The app converts them to review-inbox proposals and then clears this file.',
+                batch: null, suggestions: []
+              }, folderId);
+            }
+            return download(f.id).then(function (json) {
+              if (!json || !json.batch || !(json.suggestions || []).length) return;
+              var handler = json.mode === 'direct' ? DB.applyClaudeDirect : DB.importClaudeInbox;
+              return handler(json).then(function (c) {
+                var didWork = c && ((c.imported || 0) + (c.applied || 0) > 0 || c.reason === 'already-processed');
+                if (!didWork) return;
+                return uploadJson(INBOX_NAME, f.id, {
+                  app: 'alef.fit-claude-inbox',
+                  note: 'Processed. Write the next batch as a fresh object with a new "batch" id.',
+                  processedBatch: json.batch, processedAt: new Date().toISOString(),
+                  mode: json.mode === 'direct' ? 'direct' : 'review',
+                  applied: c.applied || 0, imported: c.imported || 0, skipped: c.skipped || 0,
+                  batch: null, suggestions: []
+                }, folderId);
+              });
+            }).catch(function () { /* unreadable inbox — ignore, next sync retries */ });
+          });
+      })
+      .then(function () { return DB.putRaw('meta', { key: 'claudeShareAt', value: Date.now() }); })
+      .then(function () { return DB.putRaw('meta', { key: 'claudeShareErr', value: '' }); });
+  }
+
+  function canAuto() {
+    var st = DB.getSettings() || {};
+    if (st.autoSync === false) return Promise.resolve(false);
+    if (!(st.gdriveClientId && st.gdriveClientSecret)) return Promise.resolve(false);
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve(false);
+    /* silent only — never pop a Google window from an auto trigger */
+    return DB.get('meta', 'gdriveRefreshToken').then(function (r) { return !!(r && r.value); });
+  }
+
+  function silentSync() {
+    if (_busy) return Promise.resolve(null);
+    return canAuto().then(function (okA) {
+      if (!okA) return null;
+      return syncNow(function () {}).catch(function () { return null; });
+    });
+  }
+
+  /* an edit happened → sync quietly after a 45 s pause */
+  function autoTouch() {
+    var st = DB.getSettings() || {};
+    if (st.autoSync === false) return;
+    if (_touchTimer) clearTimeout(_touchTimer);
+    _touchTimer = setTimeout(function () {
+      _touchTimer = null;
+      silentSync();
+    }, 45000);
+  }
+
+  function autoInit() {
+    if (_autoBound) return;
+    _autoBound = true;
+    setTimeout(silentSync, 2500); /* on launch */
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') {
+          DB.get('meta', 'lastDriveSyncAt').then(function (r) {
+            if (!r || Date.now() - r.value > 120000) silentSync();
+          });
+        } else if (document.visibilityState === 'hidden' && _touchTimer) {
+          clearTimeout(_touchTimer);
+          _touchTimer = null;
+          silentSync(); /* push before leaving */
+        }
+      });
+    }
+  }
+
+  function syncNow(onStatus) {
+    if (_busy) return Promise.reject(new Error('Sync already running'));
+    _busy = true;
+    var say = onStatus || function () {};
+    var result = { pulled: null, mediaUp: 0, mediaDown: 0, mediaTrimmed: 0, share: null };
+    var fileId = null;
+    var remoteMap = {};
+    say('Connecting to Google…');
+    return getToken()
+      .then(function () { say('Checking Drive…'); return findFile(SYNC_NAME); })
+      .then(function (f) {
+        if (!f) return null;
+        fileId = f.id;
+        say('Downloading sync data…');
+        return download(f.id);
+      })
+      .then(function (remote) {
+        if (remote) {
+          say('Merging…');
+          return DB.importAll(remote, { mode: 'merge' }).then(function (c) { result.pulled = c; });
+        }
+      })
+      .then(function () { say('Uploading data…'); return DB.exportAll({ media: 'none' }); })
+      .then(function (data) { return uploadJson(SYNC_NAME, fileId, data); })
+      .then(function () { say('Comparing media…'); return Promise.all([listMedia(), DB.all('media')]); })
+      .then(function (r) {
+        r[0].forEach(function (f) { remoteMap[f.name.slice(6)] = f.id; });
+        var local = {};
+        r[1].forEach(function (m) { local[m.id] = m; });
+        var chain = Promise.resolve();
+        Object.keys(local).forEach(function (id) {
+          if (remoteMap[id]) return;
+          chain = chain.then(function () {
+            result.mediaUp++;
+            say('Uploading media ' + result.mediaUp + '…');
+            var m = local[id];
+            return uploadJson('media-' + id, null, { id: m.id, type: m.type, dataUrl: m.dataUrl, createdAt: m.createdAt });
+          });
+        });
+        Object.keys(remoteMap).forEach(function (id) {
+          if (local[id]) return;
+          chain = chain.then(function () {
+            result.mediaDown++;
+            say('Downloading media ' + result.mediaDown + '…');
+            return download(remoteMap[id]).then(function (m) { return DB.putRaw('media', m); });
+          });
+        });
+        return chain;
+      })
+      .then(function () { return DB.gcMedia(); })
+      .then(function () { return DB.all('media'); })
+      .then(function (rows) {
+        /* trim remote blobs nothing references after the merge */
+        var keep = {};
+        rows.forEach(function (m) { keep[m.id] = 1; });
+        var chain = Promise.resolve();
+        Object.keys(remoteMap).forEach(function (id) {
+          if (keep[id]) return;
+          chain = chain.then(function () {
+            result.mediaTrimmed++;
+            return api('files/' + remoteMap[id], { method: 'DELETE', raw: true });
+          });
+        });
+        return chain;
+      })
+      .then(function () {
+        /* Claude share file — never fails the sync; errors surface in Setting */
+        var st = DB.getSettings() || {};
+        if (!st.claudeShareOn) return;
+        say('Updating Claude share…');
+        result.share = 'ok';
+        return pushClaudeShare().catch(function (e) {
+          result.share = String(e.message || e);
+          return DB.putRaw('meta', { key: 'claudeShareErr', value: result.share });
+        });
+      })
+      .then(function () { return DB.putRaw('meta', { key: 'lastDriveSyncAt', value: Date.now() }); })
+      .then(function () { say(''); _busy = false; return result; })
+      .catch(function (e) { _busy = false; throw e; });
+  }
+
+  return {
+    syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
+    /* fresh consent popup — used when enabling Claude share (adds drive.file) */
+    reconnect: function () { _token = null; return interactiveCode(); },
+    hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }
+  };
+})();

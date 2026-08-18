@@ -1,0 +1,42 @@
+# Builds the Alef.Fit Android APK (real background alarms) on every push
+# and publishes it as the rolling "apk-latest" release.
+# Download: https://github.com/AIAlef/Alef-Fit/releases/tag/apk-latest
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Assemble web app into the Capacitor shell
+        run: |
+          cd native
+          npm install
+          mkdir -p www
+          rsync -a --delete --exclude=native --exclude=.github --exclude=.git ../ www/
+          npx cap add android
+          npx cap sync android
+          V=$(grep -o "APP_VERSION = '[^']*'" www/js/app.js | cut -d"'" -f2)
+          sed -i "s/versionName \"1.0\"/versionName \"$V\"/" android/app/build/../build.gradle 2>/dev/null || true
+          sed -i "s/versionName \"1.0\"/versionName \"$V\"/" android/app/build.gradle || true
+          echo "APP_VERSION=$V" >> "$GITHUB_ENV"
+      - name: Build debug APK
+        run: cd native/android && ./gradlew assembleDebug --no-daemon
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp native/android/app/build/outputs/apk/debug/app-debug.apk AlefFit-v${APP_VERSION}.apk
+          gh release delete apk-latest -y --cleanup-tag || true
+          gh release create apk-latest "AlefFit-v${APP_VERSION}.apk" \
+            -t "Alef.Fit APK v${APP_VERSION}" \
+            -n "Sideload on Android: download, open, allow install from browser. Real background alarms included."
