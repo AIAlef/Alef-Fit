@@ -462,6 +462,7 @@ Screens.program = (function () {
       var today = DB.todayISO();
       var targetSets = item ? item.targetSets : 4;
       var dateVal = today;
+      var dateManual = false;   /* v0.35.3: Alef explicitly picked a date */
       var currentLog = null;
       var t = null;
       var saveTimer = null;
@@ -483,6 +484,7 @@ Screens.program = (function () {
       }
       function doSave() {
         saveTimer = null;
+        rollDateIfNeeded();   /* typing after midnight → save to the NEW day */
         var sets = t.getSets();
         if (!sets.length) {
           if (currentLog) {
@@ -510,6 +512,24 @@ Screens.program = (function () {
       function flushPending() {
         if (saveTimer) { clearTimeout(saveTimer); doSave(); }
       }
+      /* v0.35.3 BUG FIX: the app can stay open across midnight for days,
+         and the render-day was captured once — so new workouts kept
+         saving onto that stale date. Records must land on the day the
+         numbers are TYPED. Rolls the default date forward whenever the
+         calendar day changed (unless Alef picked a date by hand). */
+      function rollDateIfNeeded() {
+        if (dateManual) return false;
+        var now = DB.todayISO();
+        if (now === dateVal && now === today) return false;
+        today = now;
+        dateVal = now;
+        currentLog = findLog(dateVal);
+        var chip = document.getElementById('lg-dchip');
+        var din = document.getElementById('lg-date');
+        if (chip) chip.textContent = dmy(dateVal);
+        if (din) { din.value = dateVal; din.max = today; }
+        return true;
+      }
       function buildEntry() {
         card.innerHTML = '';
         var row = UI.el('<div class="rec-hist" style="margin-bottom:0"></div>');
@@ -529,6 +549,7 @@ Screens.program = (function () {
           if (v > today) { UI.toast('Future dates are not allowed'); e.target.value = dateVal; return; }
           flushPending();
           dateVal = v;
+          dateManual = true;   /* respect Alef's explicit choice from here on */
           buildEntry();
           drawPast();
         });
@@ -565,6 +586,17 @@ Screens.program = (function () {
 
       buildEntry();
       drawPast();
+
+      /* v0.35.3: coming back to the still-open app on a new day → the
+         entry panel resets to TODAY with a fresh ghost prefill */
+      document.addEventListener('visibilitychange', function onVis() {
+        if (!document.body.contains(card)) {
+          document.removeEventListener('visibilitychange', onVis);
+          return;
+        }
+        if (document.visibilityState !== 'visible') return;
+        if (!saveTimer && rollDateIfNeeded()) { buildEntry(); drawPast(); }
+      });
 
       /* exercise note from the program item — below the previous records */
       if (item && item.note) {

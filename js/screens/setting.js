@@ -172,6 +172,9 @@ Screens.setting = (function () {
       });
     });
     bk.appendChild(expSyncBtn);
+    /* v0.35.3: tell Alef WHERE the backup files live when importing */
+    bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 6px">Import: pick the backup file from ' +
+      (canFs ? '<b>S26 › Documents › S26-Alef-Fit</b>' : 'your Downloads folder') + '.</div>'));
     var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup file</button>');
     var impFile = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
     impBtn.addEventListener('click', function () { impFile.click(); });
