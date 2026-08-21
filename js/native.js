@@ -94,5 +94,38 @@ window.Native = (function () {
     catch (e) { return Promise.resolve(false); }
   }
 
-  return { isNative: isNative, syncAlarms: syncAlarms, init: init, openExternal: openExternal };
+  /* ---- file saving (v0.32) ----
+     The Android WebView silently ignores <a download>, so exports never
+     reached the Downloads folder in the APK. With the Filesystem plugin
+     the APK writes REAL files into Documents/S26-Alef-Fit instead. */
+  var SAVE_DIR = 'S26-Alef-Fit';
+  function fsPlugin() {
+    var C = window.Capacitor;
+    if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null;
+    return (C.Plugins && C.Plugins.Filesystem) || null;
+  }
+  function canSaveFiles() { return !!fsPlugin(); }
+  /* text files (JSON backups); resolves the human-readable path or null */
+  function saveText(filename, text) {
+    var p = fsPlugin();
+    if (!p) return Promise.resolve(null);
+    return p.writeFile({
+      path: SAVE_DIR + '/' + filename, data: text,
+      directory: 'DOCUMENTS', encoding: 'utf8', recursive: true
+    }).then(function () { return 'Documents/' + SAVE_DIR + '/' + filename; })
+      .catch(function () { return null; });
+  }
+  /* binary files from a base64 payload (photos/videos) */
+  function saveBase64(filename, b64) {
+    var p = fsPlugin();
+    if (!p) return Promise.resolve(null);
+    return p.writeFile({
+      path: SAVE_DIR + '/' + filename, data: b64,
+      directory: 'DOCUMENTS', recursive: true
+    }).then(function () { return 'Documents/' + SAVE_DIR + '/' + filename; })
+      .catch(function () { return null; });
+  }
+
+  return { isNative: isNative, syncAlarms: syncAlarms, init: init, openExternal: openExternal,
+           canSaveFiles: canSaveFiles, saveText: saveText, saveBase64: saveBase64 };
 })();

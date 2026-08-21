@@ -15,6 +15,34 @@ var UI = (function () {
     return t.content.firstElementChild;
   }
 
+  /* v0.35: scrollable areas with hidden scrollbars stay draggable with
+     the mouse (touch scrolls natively). Engages after 6px so taps and
+     clicks pass through untouched. */
+  function dragScroll(elm, horiz) {
+    var sp = 0, ss = 0, drag = false, moved = false, pid = null;
+    elm.addEventListener('pointerdown', function (e) {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      drag = true; moved = false; pid = e.pointerId;
+      sp = horiz ? e.clientX : e.clientY;
+      ss = horiz ? elm.scrollLeft : elm.scrollTop;
+    });
+    elm.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      var d = (horiz ? e.clientX : e.clientY) - sp;
+      if (!moved && Math.abs(d) > 6) {
+        moved = true;
+        try { elm.setPointerCapture(pid); } catch (err) { }
+      }
+      if (moved) {
+        if (horiz) elm.scrollLeft = ss - d; else elm.scrollTop = ss - d;
+        e.preventDefault();
+      }
+    });
+    ['pointerup', 'pointercancel'].forEach(function (ev) {
+      elm.addEventListener(ev, function () { drag = false; });
+    });
+  }
+
   /* Dates — always CE (Gregorian). */
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function fmtDate(iso) {
@@ -50,6 +78,7 @@ var UI = (function () {
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/></svg>',
     chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3M20 16V6"/></svg>',
     play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>',
     bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
     funnel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg>',
     sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h8M16 6h4M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="14" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
@@ -168,6 +197,18 @@ var UI = (function () {
   }
 
   function download(filename, text, mime) {
+    /* APK (v0.32): the WebView silently ignores <a download> — write a
+       real file into Documents/S26-Alef-Fit via the Filesystem plugin. */
+    if (window.Native && Native.isNative && Native.isNative()) {
+      if (!Native.canSaveFiles || !Native.canSaveFiles()) {
+        toast('Update the app (apk-latest) to enable saving files');
+        return;
+      }
+      Native.saveText(filename, text).then(function (path) {
+        toast(path ? 'Saved: ' + path : 'Could not save ' + filename);
+      });
+      return;
+    }
     var blob = new Blob([text], { type: mime || 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -189,8 +230,18 @@ var UI = (function () {
     } catch (e) { return null; }
   }
 
-  /* Save any dataURL to the device as a real file (Downloads). */
+  /* Save any dataURL to the device as a real file. */
   function saveDataUrl(dataUrl, filename) {
+    if (window.Native && Native.isNative && Native.isNative() &&
+        Native.canSaveFiles && Native.canSaveFiles()) {
+      var i = (dataUrl || '').indexOf(',');
+      var b64 = i >= 0 ? dataUrl.slice(i + 1) : '';
+      if (!b64) { toast('Could not save file'); return; }
+      Native.saveBase64(filename, b64).then(function (path) {
+        toast(path ? 'Saved: ' + path : 'Could not save ' + filename);
+      });
+      return;
+    }
     var blob = dataUrlToBlob(dataUrl);
     if (!blob) { toast('Could not save file'); return; }
     var a = document.createElement('a');
@@ -257,6 +308,7 @@ var UI = (function () {
     var root = el('<div class="rec-scroll"><table class="rec-table"><tbody>' +
       '<tr class="rec-w"><th>Wt</th></tr>' +
       '<tr class="rec-r"><th>Rep</th></tr></tbody></table></div>');
+    dragScroll(root, true);   /* scrollbar hidden (v0.35) — drag slides */
     var wRow = root.querySelector('.rec-w'), rRow = root.querySelector('.rec-r');
     /* integers only, max 3 digits, for both Wt and Rep */
     function fmtInt(v) {
@@ -343,7 +395,7 @@ var UI = (function () {
      Wt/Rep table. Used by Program logging and Retro Rep-Vol screens. */
   function recPastRow(log, onDeleted) {
     var q = log.date.split('-');
-    var dmy = q[2] + '-' + q[1] + '-' + q[0];
+    var dmy = q[2] + '-' + q[1] + '-' + q[0].slice(2);   /* dd-mm-yy (v0.34) */
     var row = el('<div class="rec-hist"></div>');
     var side = el('<div class="rec-side">' +
       '<div class="rec-date">' + dmy + '</div>' +
@@ -359,6 +411,7 @@ var UI = (function () {
     });
     row.appendChild(side);
     var sc = el('<div class="rec-scroll"></div>');
+    dragScroll(sc, true);
     sc.appendChild(el('<table class="rec-table rec-past"><tbody>' +
       '<tr><th>Wt</th>' + log.sets.slice(0, 15).map(function (s) { return '<td>' + Math.round(s.weight) + '</td>'; }).join('') + '</tr>' +
       '<tr><th>Rep</th>' + log.sets.slice(0, 15).map(function (s) { return '<td>' + Math.round(s.reps) + '</td>'; }).join('') + '</tr>' +
@@ -397,6 +450,7 @@ var UI = (function () {
     modal: modal, confirm: confirmDlg, field: field, cropWrap: cropWrap,
     fileToDataUrl: fileToDataUrl, download: download, saveImage: saveImage,
     saveDataUrl: saveDataUrl, openDataUrl: openDataUrl, lineChart: lineChart,
-    recTable: recTable, pickExercise: pickExercise, lightbox: lightbox, recPastRow: recPastRow
+    recTable: recTable, pickExercise: pickExercise, lightbox: lightbox, recPastRow: recPastRow,
+    dragScroll: dragScroll
   };
 })();

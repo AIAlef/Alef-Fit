@@ -979,17 +979,46 @@ var DB = (function () {
 
   /* ---- local To-do backup: tasks (incl. Vault) + lists + tags ---- */
   function exportTodoBackup() {
+    /* v0.32: Vault EXCLUDED — the Vault-only backup (exportVault) is the
+       one and only way Vault entries leave the device. Older todo-backup
+       files that contain vault entries still import fine. */
     return Promise.all([all('todos'), get('meta', 'todoCats'), all('tags')]).then(function (r) {
       return {
         app: 'alef.fit-todo',
         appVersion: window.APP_VERSION || '0',
         exportedAt: new Date().toISOString(),
-        todos: r[0],
+        todos: r[0].filter(function (t) { return t.cat !== 'vault'; }),
         todoCats: r[1] ? r[1].value : null,
         todoCatsAt: r[1] ? (r[1].updatedAt || 0) : 0,
         tags: r[2].filter(function (t) { return t.module === 'todo'; })
       };
     });
+  }
+
+  /* ---- Sync-info backup (v0.32): connection settings only, no data.
+     Contains the Google client SECRET — treat the file like a password. */
+  var SYNCINFO_KEYS = ['gdriveClientId', 'gdriveClientSecret', 'deviceId',
+    'autoSync', 'claudeShareOn', 'claudeShareTodo', 'claudeShareWorkout',
+    'claudeInboxOn', 'claudeDirect'];
+  function exportSyncInfo() {
+    var s = getSettings() || {};
+    var out = {
+      app: 'alef.fit', kind: 'syncinfo-backup',
+      appVersion: window.APP_VERSION || '0',
+      exportedAt: new Date().toISOString(),
+      note: 'Google Drive connection settings for Alef.Fit. Contains the OAuth client secret — keep this file PRIVATE. Restore: Setting → Import backup file.',
+      settings: {}
+    };
+    SYNCINFO_KEYS.forEach(function (k) { if (s[k] !== undefined) out.settings[k] = s[k]; });
+    return Promise.resolve(out);
+  }
+  function importSyncInfo(json) {
+    if (!json || json.app !== 'alef.fit' || json.kind !== 'syncinfo-backup' || !json.settings) {
+      return Promise.reject(new Error('Not an Alef.Fit sync-info file'));
+    }
+    var patch = {};
+    SYNCINFO_KEYS.forEach(function (k) { if (json.settings[k] !== undefined) patch[k] = json.settings[k]; });
+    return saveSettings(patch).then(function () { return Object.keys(patch).length; });
   }
   function importTodoBackup(json) {
     if (!json || json.app !== 'alef.fit-todo' || !Array.isArray(json.todos)) {
@@ -1244,6 +1273,7 @@ var DB = (function () {
     exportVault: exportVault, importVault: importVault,
     proposalMode: proposalMode, listProposals: listProposals, sendProposals: sendProposals,
     promoteNowDue: promoteNowDue, exportTodoBackup: exportTodoBackup, importTodoBackup: importTodoBackup,
+    exportSyncInfo: exportSyncInfo, importSyncInfo: importSyncInfo,
     importClaudeInbox: importClaudeInbox, applyClaudeDirect: applyClaudeDirect,
     applyProposal: applyProposal, propSummary: propSummary,
     storageEstimate: storageEstimate
