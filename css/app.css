@@ -319,7 +319,9 @@ html[data-msize="l"] .media-strip img, html[data-msize="l"] .media-strip video {
 }
 .rec-table td input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .rec-table input::-webkit-outer-spin-button, .rec-table input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.rec-table td input.ghost { color: var(--text2); }
+.rec-table td input.ghost { color: var(--text2); opacity: .55; font-style: italic; }
+.rec-reset { color: var(--accent); font-size: 1rem; }
+.lg-ghosthint { margin: 3px 2px 6px; }
 .rec-table.rec-past td {
   width: 44px; height: 44px; min-width: 44px; padding: 0; box-sizing: border-box;
   text-align: center; vertical-align: middle; font-weight: 600;
