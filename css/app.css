@@ -320,8 +320,10 @@ html[data-msize="l"] .media-strip img, html[data-msize="l"] .media-strip video {
 .rec-table td input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .rec-table input::-webkit-outer-spin-button, .rec-table input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .rec-table td input.ghost { color: var(--text2); opacity: .55; font-style: italic; }
-.rec-reset { color: var(--accent); font-size: 1rem; }
-.lg-ghosthint { margin: 3px 2px 6px; }
+/* v0.36: delete + reset side by side, small aligned squares */
+.rec-btnrow { display: flex; gap: 4px; }
+.rec-btnrow .rec-del { flex: 1; height: 30px; min-width: 0; font-size: 1rem; }
+.rec-reset { color: var(--accent); }
 .rec-table.rec-past td {
   width: 44px; height: 44px; min-width: 44px; padding: 0; box-sizing: border-box;
   text-align: center; vertical-align: middle; font-weight: 600;
@@ -402,8 +404,9 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 /* the page fills the viewport so the timer sits flush at the bottom */
 .pagepad.lg-page {
   display: flex; flex-direction: column;
-  min-height: calc(100dvh - var(--nav-h) - 130px);
-  padding-bottom: 0; padding-top: 6px;   /* v0.35: tight under the header */
+  height: calc(100dvh - var(--nav-h) - 108px);   /* v0.36: locked to the viewport — timer pinned at the bottom border */
+  min-height: 0; overflow: hidden;
+  padding-bottom: 0; padding-top: 6px;
 }
 #screen:has(.lg-page) { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); }
 /* records: compact, height-capped, scrollbar hidden (drag/touch slides),
@@ -434,8 +437,14 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .lg-recs .rec-entry { margin-bottom: 3px; }
 .lg-recs .rec-side { gap: 3px; margin-top: 3px; }
 .lg-recs .lg-note { margin: 4px 2px; }
-/* media carousel: fit width, swipe between items (JS drag + snap) */
-.lg-media { position: relative; margin-top: 2px; }
+/* media carousel: fit width, swipe between items (JS drag + snap);
+   v0.36: takes all the middle space, content vertically centered */
+.lg-media {
+  position: relative; margin-top: 2px;
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.lg-media .lg-track { max-height: 100%; }
 .lg-track {
   display: flex; overflow-x: auto; touch-action: pan-y;
   scrollbar-width: none; border-radius: var(--r-lg);
@@ -478,15 +487,16 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .gt-circle.gt-go { border-color: #35c76a; color: #35c76a; font-weight: 700; }
 .gt-int { background: none; border: 0; cursor: pointer; font: inherit; font-weight: 700; color: var(--text); padding: 4px 6px; }
 .gt-times { flex: 1; text-align: center; min-width: 0; align-self: center; }
+/* v0.36: work + rest share one size so their digits line up exactly */
 .gt-num {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums; letter-spacing: .05em; font-weight: 700;
-  line-height: 1.1;   /* v0.35.1: tighter stack of the three numbers */
+  font-variant-numeric: tabular-nums; letter-spacing: .02em; font-weight: 700;
+  line-height: 1.08;
 }
-.gt-work { font-size: 30px; }
-.gt-sep { height: 2px; background: var(--line2); margin: 2px 14%; border-radius: 2px; }
-.gt-rest { font-size: 26px; margin-top: 0; }
-.gt-elapsed { font-size: 17px; color: var(--text2); margin-top: 2px; }
+.gt-work { font-size: 28px; }
+.gt-sep { height: 2px; background: var(--line2); margin: 2px 16%; border-radius: 2px; }
+.gt-rest { font-size: 28px; margin-top: 0; }
+.gt-elapsed { font-size: 16px; color: var(--text2); margin-top: 3px; }
 .gt-ov {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);

@@ -188,7 +188,7 @@ Screens.setting = (function () {
         /* v0.32: one import button — route by the file's own type stamp */
         if (json && json.kind === 'syncinfo-backup') {
           DB.importSyncInfo(json).then(function (n) {
-            UI.toast('Sync settings restored (' + n + ' values) — tap Sync now to reconnect');
+            UI.toast('Sync settings restored (' + n + ' values) — tap Full Sync to reconnect');
             App.route();
           }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
           return;
@@ -308,7 +308,7 @@ Screens.setting = (function () {
       }
     });
     dv.appendChild(propLink);
-    dv.appendChild(UI.el('<div class="sub" style="margin-top:6px">Edits are stamped with this device name. Auto sync runs silently once Google Drive sync is connected (one manual Sync now first). In proposal mode the PC never changes live data — its edits wait in Send to S26, then in the S26 review inbox.</div>'));
+    dv.appendChild(UI.el('<div class="sub" style="margin-top:6px">Edits are stamped with this device name. Auto sync runs silently once Google Drive sync is connected (one manual Full Sync first). In proposal mode the PC never changes live data — its edits wait in Send to S26, then in the S26 review inbox.</div>'));
     pad.appendChild(dv);
 
     /* ---- Google Drive sync ---- */
@@ -342,30 +342,37 @@ Screens.setting = (function () {
       btn.setAttribute('aria-label', show ? 'Hide secret' : 'Show secret');
     });
     sy.appendChild(secRow);
-    var syBtn = UI.el('<button class="btn btn-primary btn-block">' + UI.icon('upload') + ' Sync now</button>');
+    /* v0.36: two syncs, named by what they do \u2014 Full Sync (everything)
+       and Sync Workout (Exercise + Program entries + records + media) */
+    var syBtn = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('upload') + ' Full Sync (everything)</button>');
+    var syWkBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Sync Workout (Exercise + Program)</button>');
     var syStatus = UI.el('<div class="sub" style="margin-top:8px"></div>');
     DB.get('meta', 'lastDriveSyncAt').then(function (r) {
       if (r) syStatus.textContent = 'Last synced: ' + new Date(r.value).toLocaleString();
     });
-    syBtn.addEventListener('click', function () {
+    function runSync(scope) {
       if (!Sync.hasClientId()) { UI.toast('Set the Google client ID and secret first'); return; }
-      syBtn.disabled = true;
-      Sync.syncNow(function (msg) { syStatus.textContent = msg; })
+      syBtn.disabled = true; syWkBtn.disabled = true;
+      Sync.syncNow(function (msg) { syStatus.textContent = msg; }, scope)
         .then(function (res) {
-          syBtn.disabled = false;
+          syBtn.disabled = false; syWkBtn.disabled = false;
           var p = res.pulled || { added: 0, updated: 0, deleted: 0, conflicts: 0, mediaAdded: 0 };
           syStatus.textContent = 'Last synced: ' + new Date().toLocaleString();
-          UI.toast('Synced: +' + p.added + ' / ~' + p.updated + ' / \u2212' + p.deleted +
+          UI.toast((scope === 'workout' ? 'Workout synced: ' : 'Synced: ') +
+            '+' + p.added + ' / ~' + p.updated + ' / \u2212' + p.deleted +
             ' \u00b7 media \u2191' + res.mediaUp + ' \u2193' + res.mediaDown);
           App.applySettings();
         })
         .catch(function (err) {
-          syBtn.disabled = false;
+          syBtn.disabled = false; syWkBtn.disabled = false;
           syStatus.textContent = String(err.message || err);
           UI.toast(String(err.message || err));
         });
-    });
+    }
+    syBtn.addEventListener('click', function () { runSync(); });
+    syWkBtn.addEventListener('click', function () { runSync('workout'); });
     sy.appendChild(syBtn);
+    sy.appendChild(syWkBtn);
     sy.appendChild(syStatus);
     pad.appendChild(sy);
 

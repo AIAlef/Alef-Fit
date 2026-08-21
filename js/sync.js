@@ -434,13 +434,18 @@ window.Sync = (function () {
     }
   }
 
-  function syncNow(onStatus) {
+  /* v0.36 "Sync Workout": scope limited to the training content */
+  var WORKOUT_STORES = ['exercises', 'programs', 'logs'];
+
+  function syncNow(onStatus, scope) {
     if (_busy) return Promise.reject(new Error('Sync already running'));
     _busy = true;
+    var workout = scope === 'workout';
     var say = onStatus || function () {};
     var result = { pulled: null, mediaUp: 0, mediaDown: 0, mediaTrimmed: 0, share: null };
     var fileId = null;
     var remoteMap = {};
+    var remoteData = null;
     say('Connecting to Google…');
     return getToken()
       .then(function () { say('Checking Drive…'); return findFile(SYNC_NAME); })
@@ -451,13 +456,38 @@ window.Sync = (function () {
         return download(f.id);
       })
       .then(function (remote) {
+        remoteData = remote || null;
         if (remote) {
           say('Merging…');
-          return DB.importAll(remote, { mode: 'merge' }).then(function (c) { result.pulled = c; });
+          return DB.importAll(remote, { mode: 'merge', only: workout ? WORKOUT_STORES : null })
+            .then(function (c) { result.pulled = c; });
         }
       })
       .then(function () { say('Uploading data…'); return DB.exportAll({ media: 'none' }); })
-      .then(function (data) { return uploadJson(SYNC_NAME, fileId, data); })
+      .then(function (data) {
+        if (workout && remoteData) {
+          /* patch ONLY the workout parts into the remote file — never
+             clobber the other device's newer to-dos/notes/settings */
+          WORKOUT_STORES.forEach(function (s) { remoteData.stores[s] = data.stores[s] || []; });
+          var tomb = {};
+          (remoteData.stores.tombstones || []).forEach(function (t) { tomb[t.id] = t; });
+          (data.stores.tombstones || []).forEach(function (t) {
+            if (WORKOUT_STORES.indexOf(t.store) < 0) return;
+            var r = tomb[t.id];
+            if (!r || (t.deletedAt || 0) > (r.deletedAt || 0)) tomb[t.id] = t;
+          });
+          remoteData.stores.tombstones = Object.keys(tomb).map(function (k) { return tomb[k]; });
+          var locPC = (data.stores.meta || []).find(function (r) { return r.key === 'programCats'; });
+          if (locPC) {
+            remoteData.stores.meta = (remoteData.stores.meta || [])
+              .filter(function (r) { return r.key !== 'programCats'; }).concat([locPC]);
+          }
+          remoteData.mediaIndex = data.mediaIndex;
+          remoteData.exportedAt = data.exportedAt;
+          data = remoteData;
+        }
+        return uploadJson(SYNC_NAME, fileId, data);
+      })
       .then(function () { say('Comparing media…'); return Promise.all([listMedia(), DB.all('media')]); })
       .then(function (r) {
         r[0].forEach(function (f) { remoteMap[f.name.slice(6)] = f.id; });

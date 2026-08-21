@@ -640,7 +640,7 @@ var DB = (function () {
       return putRaw('meta', { key: 'undoSnapshot', value: { at: Date.now(), mode: mode, data: snap } });
     });
     return pre.then(function () {
-      return (mode === 'replace' ? importReplace(json) : importMerge(json));
+      return (mode === 'replace' ? importReplace(json) : importMerge(json, opts.only || null));
     });
   }
 
@@ -776,12 +776,9 @@ var DB = (function () {
     if (changed) return put('meta', { key: 'settings', value: _settings });
   }
 
-  function mergeMeta(json) {
-    var rows = json.stores.meta || [];
+  function mergeMetaKeys(rows, keys) {
     var chain = Promise.resolve();
-    var incSet = rows.find(function (r) { return r.key === 'settings'; });
-    if (incSet && incSet.value) chain = chain.then(function () { return mergeSettings(incSet.value); });
-    ['programCats', 'todoCats', 'textOverrides'].forEach(function (key) {
+    keys.forEach(function (key) {
       var incRow = rows.find(function (r) { return r.key === key; });
       if (!incRow) return;
       chain = chain.then(function () {
@@ -792,8 +789,19 @@ var DB = (function () {
     });
     return chain;
   }
+  function mergeMeta(json) {
+    var rows = json.stores.meta || [];
+    var chain = Promise.resolve();
+    var incSet = rows.find(function (r) { return r.key === 'settings'; });
+    if (incSet && incSet.value) chain = chain.then(function () { return mergeSettings(incSet.value); });
+    return chain.then(function () {
+      return mergeMetaKeys(rows, ['programCats', 'todoCats', 'textOverrides']);
+    });
+  }
 
-  function importMerge(json) {
+  /* v0.36: `only` (array of store names) scopes the merge — used by
+     "Sync Workout" to touch exercises/programs/logs and nothing else. */
+  function importMerge(json, only) {
     var counts = { added: 0, updated: 0, deleted: 0, conflicts: 0, mediaAdded: 0 };
     var lastSync = 0;
     return get('meta', 'lastSyncAt').then(function (r) { lastSync = r ? r.value : 0; })
@@ -817,12 +825,14 @@ var DB = (function () {
         var incTombs = json.stores.tombstones || [];
         var chain = Promise.resolve();
         DATA_STORES.forEach(function (s) {
+          if (only && only.indexOf(s) < 0) return;
           chain = chain.then(function () {
             return mergeStore(s, json.stores[s] || [], incTombs, locTombMap, counts, lastSync);
           });
         });
         chain = chain.then(function () {
           return Promise.all(incTombs.map(function (t) {
+            if (only && only.indexOf(t.store) < 0) return null;
             var lt = locTombMap[t.id];
             if (!lt || lt.deletedAt < t.deletedAt) return putRaw('tombstones', t);
             return null;
@@ -830,8 +840,15 @@ var DB = (function () {
         });
         return chain;
       })
-      .then(function () { return mergeMeta(json); })
-      .then(function () { return putRaw('meta', { key: 'lastSyncAt', value: Date.now() }); })
+      .then(function () {
+        if (only) {
+          /* scoped: only the program categories ride along */
+          return only.indexOf('programs') >= 0
+            ? mergeMetaKeys(json.stores.meta || [], ['programCats']) : null;
+        }
+        return mergeMeta(json);
+      })
+      .then(function () { return only ? null : putRaw('meta', { key: 'lastSyncAt', value: Date.now() }); })
       .then(loadSettings)
       .then(gcMedia)
       .then(function () { return counts; });
