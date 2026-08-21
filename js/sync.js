@@ -228,8 +228,7 @@ window.Sync = (function () {
     });
   }
 
-  function pushClaudeShare() {
-    var folderId;
+  function ensureShareFolder() {
     return findVisible("name='" + SHARE_FOLDER + "' and mimeType='application/vnd.google-apps.folder'")
       .then(function (f) {
         if (f) return f;
@@ -239,49 +238,131 @@ window.Sync = (function () {
           body: JSON.stringify({ name: SHARE_FOLDER, mimeType: 'application/vnd.google-apps.folder' })
         });
       })
-      .then(function (f) {
-        folderId = f.id;
-        return findVisible("name='" + SHARE_NAME + "' and '" + folderId + "' in parents");
-      })
+      .then(function (f) { return f.id; });
+  }
+
+  function uploadShare(folderId) {
+    _shareDirty = false; /* edits made during the upload re-dirty it */
+    return findVisible("name='" + SHARE_NAME + "' and '" + folderId + "' in parents")
       .then(function (f) {
         return DB.buildClaudeShare().then(function (data) {
           return uploadJson(SHARE_NAME, f ? f.id : null, data, folderId);
         });
       })
-      .then(function () {
-        /* Claude suggestions inbox: app-created so the app may read it;
-           Claude UPDATES this file with suggestion batches. Read + convert
-           to proposals, then acknowledge so a batch imports only once. */
-        if ((DB.getSettings() || {}).claudeInboxOn === false) return;
-        return findVisible("name='" + INBOX_NAME + "' and '" + folderId + "' in parents")
-          .then(function (f) {
-            if (!f) {
-              return uploadJson(INBOX_NAME, null, {
-                app: 'alef.fit-claude-inbox',
-                note: 'Claude secretary: write suggestion batches here (docs/CLAUDE-INBOX.md). The app converts them to review-inbox proposals and then clears this file.',
-                batch: null, suggestions: []
-              }, folderId);
-            }
-            return download(f.id).then(function (json) {
-              if (!json || !json.batch || !(json.suggestions || []).length) return;
-              var handler = json.mode === 'direct' ? DB.applyClaudeDirect : DB.importClaudeInbox;
-              return handler(json).then(function (c) {
-                var didWork = c && ((c.imported || 0) + (c.applied || 0) > 0 || c.reason === 'already-processed');
-                if (!didWork) return;
-                return uploadJson(INBOX_NAME, f.id, {
-                  app: 'alef.fit-claude-inbox',
-                  note: 'Processed. Write the next batch as a fresh object with a new "batch" id.',
-                  processedBatch: json.batch, processedAt: new Date().toISOString(),
-                  mode: json.mode === 'direct' ? 'direct' : 'review',
-                  applied: c.applied || 0, imported: c.imported || 0, skipped: c.skipped || 0,
-                  batch: null, suggestions: []
-                }, folderId);
-              });
-            }).catch(function () { /* unreadable inbox — ignore, next sync retries */ });
-          });
-      })
       .then(function () { return DB.putRaw('meta', { key: 'claudeShareAt', value: Date.now() }); })
       .then(function () { return DB.putRaw('meta', { key: 'claudeShareErr', value: '' }); });
+  }
+
+  /* Claude suggestions inbox: app-created so the app may read it; Claude
+     UPDATES this file with suggestion batches. Read + convert/apply, then
+     acknowledge so a batch imports only once. Resolves to the handler's
+     counts ({applied,imported,skipped}) or null when there was nothing. */
+  function processInbox(folderId) {
+    if ((DB.getSettings() || {}).claudeInboxOn === false) return Promise.resolve(null);
+    return findVisible("name='" + INBOX_NAME + "' and '" + folderId + "' in parents")
+      .then(function (f) {
+        if (!f) {
+          return uploadJson(INBOX_NAME, null, {
+            app: 'alef.fit-claude-inbox',
+            note: 'Claude secretary: write suggestion batches here (docs/CLAUDE-INBOX.md). The app converts them to review-inbox proposals and then clears this file.',
+            batch: null, suggestions: []
+          }, folderId).then(function () { return null; });
+        }
+        return download(f.id).then(function (json) {
+          if (!json || !json.batch || !(json.suggestions || []).length) return null;
+          var handler = json.mode === 'direct' ? DB.applyClaudeDirect : DB.importClaudeInbox;
+          return handler(json).then(function (c) {
+            var didWork = c && ((c.imported || 0) + (c.applied || 0) > 0 || c.reason === 'already-processed');
+            if (!didWork) return c || null;
+            return uploadJson(INBOX_NAME, f.id, {
+              app: 'alef.fit-claude-inbox',
+              note: 'Processed. Write the next batch as a fresh object with a new "batch" id.',
+              processedBatch: json.batch, processedAt: new Date().toISOString(),
+              mode: json.mode === 'direct' ? 'direct' : 'review',
+              applied: c.applied || 0, imported: c.imported || 0, skipped: c.skipped || 0,
+              batch: null, suggestions: []
+            }, folderId).then(function () { return c; });
+          });
+        }).catch(function () { return null; /* unreadable inbox — next sync retries */ });
+      });
+  }
+
+  function pushClaudeShare() {
+    /* v0.31: inbox FIRST, share second — the uploaded share then already
+       includes whatever Claude's batch just changed (no stale window). */
+    return ensureShareFolder().then(function (folderId) {
+      return processInbox(folderId).then(function () { return uploadShare(folderId); });
+    });
+  }
+
+  /* ---- v0.31 instant sync (docs/LUCILIUS-INTEROP-PLAN.md Part D) ---- */
+  var _rtBusy = false, _lastRT = 0;
+  var _shareDirty = false, _fastTimer = null, _lastInput = 0;
+  var IDLE_MS = 7000;   /* fast share fires after 7 s without any input */
+
+  /* One round-trip: pull + apply Claude's pending batch, then push a fresh
+     share. Used by the Alef.do header button (interactive) and pull-on-open
+     (silent). Resolves to a status object — callers decide what to show. */
+  function claudeRoundTrip(opts) {
+    opts = opts || {};
+    var st = DB.getSettings() || {};
+    if (!st.claudeShareOn) return Promise.resolve({ off: true });
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve({ offline: true });
+    if (_busy || _rtBusy) return Promise.resolve({ busy: true });
+    if (Date.now() - _lastRT < (opts.minGap || 10000)) return Promise.resolve({ fresh: true });
+    var pre = opts.interactive
+      ? getToken()
+      : canAuto().then(function (ok) { return ok ? getToken() : Promise.reject({ quiet: true }); });
+    _rtBusy = true;
+    var counts = null;
+    return pre
+      .then(function () { return ensureShareFolder(); })
+      .then(function (folderId) {
+        return processInbox(folderId).then(function (c) { counts = c; return uploadShare(folderId); });
+      })
+      .then(function () {
+        _rtBusy = false;
+        _lastRT = Date.now();
+        return { ok: true, applied: (counts && counts.applied) || 0,
+                 imported: (counts && counts.imported) || 0,
+                 skipped: (counts && counts.skipped) || 0 };
+      })
+      .catch(function (e) {
+        _rtBusy = false;
+        if (e && e.quiet) return null;   /* silent path had no stored auth */
+        throw e;
+      });
+  }
+
+  /* Pull-on-open: silent + throttled (once per 2 min). Never prompts. */
+  function claudeAutoRefresh() {
+    return claudeRoundTrip({ minGap: 120000 }).catch(function () { return null; });
+  }
+
+  /* Fast share: after an edit, wait until Alef is idle (no touch/typing
+     for 7 s), then push just the Claude share — cheap single-file upload. */
+  function armFastShare() {
+    if (_fastTimer) clearTimeout(_fastTimer);
+    var wait = Math.max(600, IDLE_MS - (Date.now() - _lastInput));
+    _fastTimer = setTimeout(function () {
+      _fastTimer = null;
+      if (!_shareDirty) return;
+      if (Date.now() - _lastInput < IDLE_MS) { armFastShare(); return; }  /* still busy typing */
+      fastSharePush();
+    }, wait);
+  }
+
+  function fastSharePush() {
+    var st = DB.getSettings() || {};
+    if (!st.claudeShareOn) { _shareDirty = false; return; }
+    if (_busy || _rtBusy) { armFastShare(); return; }   /* a sync is running — retry after */
+    canAuto().then(function (ok) {
+      if (!ok) return;   /* offline or no silent auth — the 45 s sync catches it */
+      return getToken()
+        .then(function () { return ensureShareFolder(); })
+        .then(uploadShare)
+        .catch(function () { /* stays dirty; a later push retries */ });
+    });
   }
 
   function canAuto() {
@@ -301,10 +382,16 @@ window.Sync = (function () {
     });
   }
 
-  /* an edit happened → sync quietly after a 45 s pause */
+  /* an edit happened → fast share once idle 7 s (v0.31) + full quiet sync
+     after the usual 45 s pause */
   function autoTouch() {
     var st = DB.getSettings() || {};
     if (st.autoSync === false) return;
+    if (st.claudeShareOn) {
+      _shareDirty = true;
+      _lastInput = Date.now();   /* the edit itself counts as input */
+      armFastShare();
+    }
     if (_touchTimer) clearTimeout(_touchTimer);
     _touchTimer = setTimeout(function () {
       _touchTimer = null;
@@ -317,15 +404,31 @@ window.Sync = (function () {
     _autoBound = true;
     setTimeout(silentSync, 2500); /* on launch */
     if (typeof document !== 'undefined' && document.addEventListener) {
+      /* idle detector for the fast share — any touch/typing restarts the 7 s clock */
+      ['pointerdown', 'keydown', 'input'].forEach(function (ev) {
+        document.addEventListener(ev, function () { _lastInput = Date.now(); }, true);
+      });
       document.addEventListener('visibilitychange', function () {
         if (document.visibilityState === 'visible') {
           DB.get('meta', 'lastDriveSyncAt').then(function (r) {
             if (!r || Date.now() - r.value > 120000) silentSync();
           });
-        } else if (document.visibilityState === 'hidden' && _touchTimer) {
-          clearTimeout(_touchTimer);
-          _touchTimer = null;
-          silentSync(); /* push before leaving */
+          /* back on Alef.do → quietly pick up anything Claude left (D2) */
+          if (location.hash === '#/discipline/todo') {
+            claudeAutoRefresh().then(function (r) {
+              if (r && ((r.applied || 0) + (r.imported || 0) > 0) &&
+                  location.hash === '#/discipline/todo' && window.App) App.route();
+            });
+          }
+        } else if (document.visibilityState === 'hidden') {
+          if (_fastTimer) { clearTimeout(_fastTimer); _fastTimer = null; }
+          if (_touchTimer) {
+            clearTimeout(_touchTimer);
+            _touchTimer = null;
+            silentSync(); /* push before leaving (includes the Claude share) */
+          } else if (_shareDirty) {
+            fastSharePush(); /* only the share was pending — push it now */
+          }
         }
       });
     }
@@ -414,6 +517,8 @@ window.Sync = (function () {
 
   return {
     syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
+    /* v0.31 instant sync: header button + pull-on-open (Part D) */
+    claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
     hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }

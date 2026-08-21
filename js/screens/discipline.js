@@ -85,10 +85,36 @@ Screens.discipline = (function () {
   var _nowColor = '#d9a441'; /* NOW list color — borders the flagged tasks */
 
   function renderTodo(el) {
-    el.appendChild(UI.header({
+    var hdr = UI.header({
       title: 'Alef.do', back: '#/discipline',
       action: { icon: 'dots', label: 'menu', onClick: function () { toggleMenu(); } }
-    }));
+    });
+    /* v0.31 D1: icon-only Claude sync button — pull Claude's batch, apply,
+       push a fresh share. Shown only while Share with Claude is on. */
+    if ((DB.getSettings() || {}).claudeShareOn && window.Sync && Sync.claudeRoundTrip) {
+      var syncBtn = UI.el('<button class="btn-icon" aria-label="Sync with Claude">' + UI.icon('sync') + '</button>');
+      syncBtn.addEventListener('click', function () {
+        if (syncBtn.classList.contains('spin')) return;
+        syncBtn.classList.add('spin');
+        Sync.claudeRoundTrip({ interactive: true })
+          .then(function (r) {
+            syncBtn.classList.remove('spin');
+            if (!r) { UI.toast('Sync could not run'); return; }
+            if (r.off) { UI.toast('Turn on Setting → Share with Claude'); return; }
+            if (r.offline) { UI.toast('Offline — will sync when back online'); return; }
+            if (r.busy) { UI.toast('Sync already running…'); return; }
+            UI.toast('Synced ✓');
+            if ((r.applied || 0) + (r.imported || 0) > 0) draw();
+          })
+          .catch(function (e) {
+            syncBtn.classList.remove('spin');
+            UI.toast('Sync failed: ' + String(e && e.message || e).slice(0, 80));
+          });
+      });
+      var actSpan = hdr.querySelector('.topbar-action');
+      actSpan.insertBefore(syncBtn, actSpan.firstChild);
+    }
+    el.appendChild(hdr);
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
     var wrap = UI.el('<div></div>');
@@ -465,6 +491,14 @@ Screens.discipline = (function () {
 
     el.appendChild(UI.fab('Add task', quickAdd));
     draw();
+    /* v0.31 D2: pull-on-open — quietly pick up anything Claude queued
+       while the app was closed. Silent + throttled (2 min) inside Sync. */
+    if (window.Sync && Sync.claudeAutoRefresh) {
+      Sync.claudeAutoRefresh().then(function (r) {
+        if (r && ((r.applied || 0) + (r.imported || 0) > 0) &&
+            location.hash === '#/discipline/todo') draw();
+      });
+    }
   }
 
   /* ---- task detail sheet (slides up) ---- */

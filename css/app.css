@@ -80,7 +80,8 @@ img, video { max-width: 100%; border-radius: var(--r-md); }
   padding-top: calc(10px + env(safe-area-inset-top, 0px));
 }
 .topbar h1 { flex: 1; font-size: var(--fs-lg); letter-spacing: -.01em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topbar-back, .topbar-spacer, .topbar-action { width: 42px; display: flex; justify-content: center; }
+.topbar-back, .topbar-spacer { width: 42px; display: flex; justify-content: center; }
+.topbar-action { min-width: 42px; display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
 .topbar-back { border-radius: 999px; padding: 6px 0; }
 .topbar-back:active { background: var(--accent-soft); }
 .topbar-back .icon svg { width: 24px; height: 24px; }
@@ -226,6 +227,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   animation: sheetUp .22s cubic-bezier(.3, 1.2, .5, 1);
 }
 @keyframes fadeIn { from { opacity: 0; } }
+/* Claude sync button (v0.31): the icon spins while a round-trip runs */
+.btn-icon.spin svg { animation: uiSpin 1s linear infinite; }
+@keyframes uiSpin { to { transform: rotate(360deg); } }
 @keyframes sheetUp { from { transform: translateY(40px); opacity: .6; } }
 .modal-title { font-size: var(--fs-lg); font-weight: 700; margin-bottom: var(--sp-3); }
 .modal-btns { display: flex; gap: 10px; margin-top: var(--sp-4); }
