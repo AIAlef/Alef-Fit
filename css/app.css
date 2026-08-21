@@ -302,11 +302,12 @@ html[data-msize="l"] .media-strip img, html[data-msize="l"] .media-strip video {
 }
 
 /* ---- record table (44px square slots; sets as columns) ---- */
-.rec-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; flex: 1; min-width: 0; }
+.rec-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; flex: 1; min-width: 0; scrollbar-width: none; }
+.rec-scroll::-webkit-scrollbar { display: none; }   /* v0.35: no slider bar — drag/slide instead */
 .rec-table { border-collapse: separate; border-spacing: 2px 6px; }
 .rec-table th {
   position: sticky; left: 0; z-index: 1; background: var(--surface2); color: var(--text2);
-  font-size: var(--fs-xs); font-weight: 700; text-align: left; white-space: nowrap;
+  font-size: var(--fs-xs); font-weight: 700; text-align: center; white-space: nowrap;
   padding: 9px 12px; border-radius: 999px;
 }
 .rec-table td { padding: 0; text-align: center; }
@@ -395,6 +396,137 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .btn-mini.plus svg { width: 16px; height: 16px; }
 .cat-zone { min-height: 12px; }
 .cat-empty { padding: 0 6px 6px; font-size: var(--fs-sm); color: var(--text2); }
+/* ---- v0.33/v0.34: exercise record page (old-iOS-app blueprint) ---- */
+/* the page fills the viewport so the timer sits flush at the bottom */
+.pagepad.lg-page {
+  display: flex; flex-direction: column;
+  min-height: calc(100dvh - var(--nav-h) - 130px);
+  padding-bottom: 0; padding-top: 6px;   /* v0.35: tight under the header */
+}
+#screen:has(.lg-page) { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); }
+/* records: compact, height-capped, scrollbar hidden (drag/touch slides),
+   bottom fades so the media layer shows through where they overlap */
+.lg-recs {
+  max-height: 32vh; overflow-y: auto; position: relative; z-index: 2;
+  margin-bottom: -22px; padding-bottom: 22px;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 76%, rgba(0,0,0,.25) 95%, transparent);
+  mask-image: linear-gradient(to bottom, #000 76%, rgba(0,0,0,.25) 95%, transparent);
+}
+.lg-recs::-webkit-scrollbar { display: none; }
+.lg-recs .rec-title { margin: 0 2px 4px; cursor: pointer; user-select: none; }
+/* v0.35: tap "Record sets" → fold to just the title + today entry */
+.lg-recs.recs-min > :not(.rec-title):not(.rec-entry) { display: none; }
+.lg-recs.recs-min {
+  max-height: none; margin-bottom: 4px; padding-bottom: 0;
+  -webkit-mask-image: none; mask-image: none;
+}
+/* ~80% boxes + tighter vertical rhythm inside the record area */
+.lg-recs .rec-table td input,
+.lg-recs .rec-table.rec-past td { width: 36px; height: 36px; min-width: 36px; border-radius: 8px; }
+.lg-recs .rec-table th { padding: 6px 10px; }
+.lg-recs .rec-table { border-spacing: 2px 3px; }
+.lg-recs .rec-date { min-width: 74px; height: 36px; border-radius: 8px; }
+.lg-recs .rec-del { height: 36px; border-radius: 8px; }
+.lg-recs .rec-hist { margin-bottom: 3px; }
+.lg-recs .rec-entry { margin-bottom: 3px; }
+.lg-recs .rec-side { gap: 3px; margin-top: 3px; }
+.lg-recs .lg-note { margin: 4px 2px; }
+/* media carousel: fit width, swipe between items (JS drag + snap) */
+.lg-media { position: relative; margin-top: 2px; }
+.lg-track {
+  display: flex; overflow-x: auto; touch-action: pan-y;
+  scrollbar-width: none; border-radius: var(--r-lg);
+}
+.lg-track::-webkit-scrollbar { display: none; }
+.lg-slide { flex: 0 0 100%; min-width: 100%; position: relative; }
+/* v0.35: true full-width media — outranks the base .media-stage .crop-box
+   height rule that appears later in this file */
+.lg-media .lg-slide .crop-box { width: 100%; height: auto; max-height: none; margin: 0; }
+.lg-media .lg-slide img, .lg-media .lg-slide video { width: 100%; max-height: 54vh; }
+.lg-pp {
+  position: absolute; right: 10px; bottom: 10px; z-index: 3;
+  width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(0,0,0,.55); color: #fff; display: flex; align-items: center; justify-content: center;
+}
+.lg-pp svg { width: 20px; height: 20px; }
+/* gym interval timer — flush to the bottom of the page */
+.gt-card { margin-top: auto; padding-top: 8px; }
+.gt-roundbar {
+  background: var(--surface2); border: 1px solid var(--line); border-bottom: 0;
+  border-radius: var(--r-md) var(--r-md) 0 0; text-align: center;
+  padding: 8px 0; font-size: var(--fs-lg); letter-spacing: .02em;
+  cursor: pointer; user-select: none;
+}
+/* tap the Round bar → fold the timer to just that row (keeps running) */
+.gt-card.gt-min .gt-main { display: none; }
+.gt-card.gt-min .gt-roundbar { border-bottom: 1px solid var(--line); border-radius: var(--r-md); }
+.gt-main {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 0 0 var(--r-md) var(--r-md); padding: 12px 10px 10px;
+}
+/* both circles top-aligned → Start sits level with Reset (v0.35.1) */
+.gt-side { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.gt-circle {
+  width: 74px; height: 74px; border-radius: 50%; cursor: pointer; font: inherit;
+  border: 2px solid var(--line2); background: none; color: var(--text);
+}
+.gt-circle:disabled { opacity: .35; cursor: default; }
+.gt-circle.gt-go { border-color: #35c76a; color: #35c76a; font-weight: 700; }
+.gt-int { background: none; border: 0; cursor: pointer; font: inherit; font-weight: 700; color: var(--text); padding: 4px 6px; }
+.gt-times { flex: 1; text-align: center; min-width: 0; align-self: center; }
+.gt-num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums; letter-spacing: .05em; font-weight: 700;
+  line-height: 1.1;   /* v0.35.1: tighter stack of the three numbers */
+}
+.gt-work { font-size: 30px; }
+.gt-sep { height: 2px; background: var(--line2); margin: 2px 14%; border-radius: 2px; }
+.gt-rest { font-size: 26px; margin-top: 0; }
+.gt-elapsed { font-size: 17px; color: var(--text2); margin-top: 2px; }
+.gt-ov {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.gt-ov span { font-size: 120px; font-weight: 800; color: #fff; text-shadow: 0 4px 30px rgba(0,0,0,.6); }
+.gt-ov.hidden { display: none; }
+/* Intervals editor (v0.34): fullscreen sheet, label left / controls
+   right, big text, arrow-less dropdowns, room for the presets */
+.modal.gt-sheet {
+  max-width: none; width: 100%; height: 100dvh; max-height: none;
+  border-radius: 0; display: flex; flex-direction: column;
+}
+.gt-sheet .modal-body { flex: 1; overflow-y: auto; }
+.gt-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 6px; padding: 4px 0;
+}
+.gt-row-lab { font-size: 18px; font-weight: 700; }
+.gt-ms { display: flex; align-items: center; gap: 6px; }
+.gt-ms select {
+  appearance: none; -webkit-appearance: none; background-image: none;
+  width: auto; min-width: 62px; text-align: center; text-align-last: center;
+  font-size: 19px; font-weight: 700; padding: 8px 10px;
+}
+.gt-preset {
+  display: flex; align-items: center; gap: 8px; padding: 9px 4px;
+  border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.gt-preset-t, .gt-preset-n { font-size: 16px; }
+.gt-preset:last-child { border-bottom: 0; }
+.gt-preset-t { font-weight: 700; font-variant-numeric: tabular-nums; }
+.gt-preset-n { margin-left: auto; color: var(--text2); }
+.gt-dot { color: #35c76a; }
+
+/* v0.32: empty list rows are tappable — one touch adds a task there.
+   v0.34: styled exactly like the old plain "empty" label, per Alef. */
+button.cat-empty {
+  display: block; width: 100%; background: none; border: 0; cursor: pointer;
+  font: inherit; padding: 0 6px 6px; text-align: left;
+  font-size: var(--fs-sm); color: var(--text2);
+}
+button.cat-empty:active { color: var(--text); }
 .prog-row { margin-bottom: var(--sp-2); }
 .drag-handle { color: var(--line2); font-size: 1.15rem; padding: 0 6px 0 0; cursor: grab; touch-action: none; user-select: none; }
 .drag-ghost { position: fixed; z-index: 99; opacity: .92; pointer-events: none; box-shadow: var(--shadow-lg); border-radius: var(--r-lg); }
