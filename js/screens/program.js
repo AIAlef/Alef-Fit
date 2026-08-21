@@ -431,61 +431,34 @@ Screens.program = (function () {
       var pad = UI.el('<div class="pagepad"></div>');
       el.appendChild(pad);
 
-      /* media carousel: videos autoplay muted in a loop; tap right/left half
-         of the stage for next/previous when there is more than one item. */
-      var media = x.media || [];
-      if (media.length) {
-        var stage = UI.el('<div class="media-stage"></div>');
-        var dots = UI.el('<div class="media-dots"></div>');
-        var idx = 0;
-        function show(i) {
-          idx = (i + media.length) % media.length;
-          stage.innerHTML = '';
-          var m = media[idx];
-          if (m.type === 'video') {
-            var v = document.createElement('video');
-            v.src = m.dataUrl; v.muted = true; v.loop = true; v.autoplay = true;
-            v.playsInline = true; v.setAttribute('playsinline', '');
-            stage.appendChild(UI.cropWrap(v, m.crop));
-            var pr = v.play && v.play();
-            if (pr && pr.catch) pr.catch(function () { /* will play on tap */ });
-          } else {
-            stage.appendChild(UI.cropWrap(UI.el('<img src="' + m.dataUrl + '" alt="">'), m.crop));
-          }
-          if (media.length > 1) {
-            dots.innerHTML = media.map(function (_, d) {
-              return '<span' + (d === idx ? ' class="on"' : '') + '></span>';
-            }).join('');
-          }
-        }
-        if (media.length > 1) {
-          stage.addEventListener('click', function (e) {
-            var r = stage.getBoundingClientRect();
-            var frac = (e.clientX - r.left) / r.width;
-            if (frac >= 0.75) show(idx + 1);        /* right quarter → next */
-            else if (frac <= 0.25) show(idx - 1);   /* left quarter → previous */
-            /* center 50%: no navigation */
-          });
-        }
-        show(0);
-        pad.appendChild(stage);
-        pad.appendChild(dots);
-      }
-
       var item = null;
       if (p) {
         var day = (p.days || []).find(function (d) { return d.dayNo === dayNo; });
         if (day) item = (day.items || []).find(function (i) { return i.exerciseId === xid; });
       }
 
-      /* title line: Record sets · Target · save status (compact for S26) */
-      pad.appendChild(UI.el('<div class="section-title rec-title">Record sets' +
+      /* v0.33 layout (old-iOS-app blueprint): records TOP (compact,
+         scrollable, bottom fades over the media) → media carousel MIDDLE
+         (swipe, corner play/pause) → gym interval timer BOTTOM (flush).
+         v0.34: tighter spacing, hidden scrollbars with drag-to-scroll,
+         2-digit years, tap media to minimize, timer minimize. */
+      pad.classList.add('lg-page');
+      var recWrap = UI.el('<div class="lg-recs"></div>');
+      pad.appendChild(recWrap);
+      dragScroll(recWrap, false);
+
+      /* title line: Record sets · Target · save status (compact for S26).
+         v0.35: tap it to fold the records down to just the title + the
+         today entry panel (like the timer's Round bar) — tap to restore. */
+      var recTitle = UI.el('<div class="section-title rec-title" role="button">Record sets' +
         (item ? '<span class="target-inline">Target ' + item.targetSets + ' × ' + UI.esc(item.targetReps) + '</span>' : '') +
-        '<span id="lg-status" class="sub" style="text-transform:none"></span></div>'));
+        '<span id="lg-status" class="sub" style="text-transform:none"></span></div>');
+      recTitle.addEventListener('click', function () { recWrap.classList.toggle('recs-min'); });
+      recWrap.appendChild(recTitle);
 
       /* record entry — autosaves; bare row aligned with past records below */
       var card = UI.el('<div class="rec-entry"></div>');
-      pad.appendChild(card);
+      recWrap.appendChild(card);
       var today = DB.todayISO();
       var targetSets = item ? item.targetSets : 4;
       var dateVal = today;
@@ -493,7 +466,7 @@ Screens.program = (function () {
       var t = null;
       var saveTimer = null;
 
-      function dmy(iso) { var q = iso.split('-'); return q[2] + '-' + q[1] + '-' + q[0]; }
+      function dmy(iso) { var q = iso.split('-'); return q[2] + '-' + q[1] + '-' + q[0].slice(2); }
       function findLog(d) {
         return history.find(function (h) { return h.date === d; }) || null;
       }
@@ -577,7 +550,7 @@ Screens.program = (function () {
 
       /* past records — same row pattern, aligned with the entry above */
       var pastWrap = UI.el('<div></div>');
-      pad.appendChild(pastWrap);
+      recWrap.appendChild(pastWrap);
       function drawPast() {
         pastWrap.innerHTML = '';
         var rows = history.filter(function (h) { return !currentLog || h.id !== currentLog.id; });
@@ -595,9 +568,343 @@ Screens.program = (function () {
 
       /* exercise note from the program item — below the previous records */
       if (item && item.note) {
-        pad.appendChild(UI.el('<div class="lg-note sub">📝 ' + UI.esc(item.note) + '</div>'));
+        recWrap.appendChild(UI.el('<div class="lg-note sub">📝 ' + UI.esc(item.note) + '</div>'));
+      }
+
+      /* ---- media carousel (v0.33): fit width, swipe next/previous,
+         video gets a play/pause button in the lower corner ---- */
+      var media = x.media || [];
+      if (media.length) {
+        var mwrap = UI.el('<div class="lg-media"></div>');
+        var track = UI.el('<div class="lg-track"></div>');
+        var dots = UI.el('<div class="media-dots"></div>');
+        media.forEach(function (m) {
+          var slide = UI.el('<div class="media-stage lg-slide"></div>');
+          if (m.type === 'video') {
+            var v = document.createElement('video');
+            v.src = m.dataUrl; v.muted = true; v.loop = true; v.autoplay = true;
+            v.playsInline = true; v.setAttribute('playsinline', '');
+            slide.appendChild(UI.cropWrap(v, m.crop));
+            var pp = UI.el('<button type="button" class="lg-pp" aria-label="play or pause">' + UI.icon('pause') + '</button>');
+            pp.addEventListener('click', function (e) {
+              e.stopPropagation();
+              if (v.paused) {
+                var pr = v.play();
+                if (pr && pr.catch) pr.catch(function () { });
+                pp.innerHTML = UI.icon('pause');
+              } else {
+                v.pause();
+                pp.innerHTML = UI.icon('play');
+              }
+            });
+            slide.appendChild(pp);
+            var pr0 = v.play && v.play();
+            if (pr0 && pr0.catch) pr0.catch(function () { pp.innerHTML = UI.icon('play'); });
+          } else {
+            slide.appendChild(UI.cropWrap(UI.el('<img src="' + m.dataUrl + '" alt="">'), m.crop));
+          }
+          track.appendChild(slide);
+        });
+        mwrap.appendChild(track);
+        var paintDots = function (i) {
+          dots.innerHTML = media.map(function (_, d) {
+            return '<span' + (d === i ? ' class="on"' : '') + '></span>';
+          }).join('');
+        };
+        if (media.length > 1) {
+          paintDots(0);
+          track.addEventListener('scroll', function () {
+            var i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+            paintDots(Math.min(media.length - 1, Math.max(0, i)));
+          }, { passive: true });
+          mwrap.appendChild(dots);
+        }
+        /* v0.34: pointer-drag swipe (mouse AND touch) with snap, and a
+           plain tap on the media minimizes/restores it so the record
+           rows get the whole screen. */
+        (function () {
+          var sx = 0, sl = 0, drag = false, moved = false, pid = null;
+          track.addEventListener('pointerdown', function (e) {
+            if (e.target.closest('.lg-pp')) return;
+            drag = true; moved = false; sx = e.clientX; sl = track.scrollLeft; pid = e.pointerId;
+          });
+          track.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            var dx = e.clientX - sx;
+            if (!moved && Math.abs(dx) > 8) {
+              moved = true;
+              try { track.setPointerCapture(pid); } catch (err) { }
+            }
+            if (moved) { track.scrollLeft = sl - dx; e.preventDefault(); }
+          });
+          function end(e) {
+            if (!drag) return;
+            drag = false;
+            var w = Math.max(1, track.clientWidth);
+            if (moved) {
+              var dx = e.clientX - sx;
+              var base = Math.round(sl / w);
+              var idx = base;
+              if (dx < -w * 0.15) idx = base + 1;        /* dragged left → next */
+              else if (dx > w * 0.15) idx = base - 1;    /* dragged right → previous */
+              else idx = Math.round(track.scrollLeft / w);
+              idx = Math.min(media.length - 1, Math.max(0, idx));
+              track.scrollTo({ left: idx * w, behavior: 'smooth' });
+              paintDots(idx);
+            }
+            /* v0.35: a plain tap on the media does NOTHING — play/pause
+               only via the corner button, swipe only by drag/slide */
+          }
+          track.addEventListener('pointerup', end);
+          track.addEventListener('pointercancel', function () { drag = false; });
+        })();
+        pad.appendChild(mwrap);
+      }
+
+      pad.appendChild(buildGymTimer());
+    });
+  }
+
+  var dragScroll = UI.dragScroll;   /* shared helper (ui.js, v0.35) */
+
+  /* ---- gym interval timer (v0.33, old-iOS-app blueprint) ----
+     Countdown timer: top number = Work time, middle = Rest time, bottom =
+     elapsed (all mm:ss:cs). Start → 3-2-1 overlay with beeps → work/rest
+     rounds with sound cues. Reset disabled while running. "Intervals"
+     opens the editor with saved presets. Settings persist (synced). */
+  function buildGymTimer() {
+    var st0 = DB.getSettings() || {};
+    var gt = Object.assign({ work: 45, rest: 30, rounds: 8 }, st0.gymTimer || {});
+    var ph = 'idle', phBefore = null, round = 0;
+    var leftMs = gt.work * 1000, elapsedMs = 0, preLeft = 0, preShown = 4;
+    var lastT = 0, tick = null, _ac = null, lastSec = -1;
+
+    var cardT = UI.el('<div class="gt-card">' +
+      '<div class="gt-roundbar" id="gt-round">Round 0/' + gt.rounds + '</div>' +
+      '<div class="gt-main">' +
+      '<div class="gt-side"><button type="button" class="gt-circle" id="gt-reset">Reset</button>' +
+      '<button type="button" class="gt-int" id="gt-int">Intervals</button></div>' +
+      '<div class="gt-times">' +
+      '<div class="gt-num gt-work" id="gt-work"></div>' +
+      '<div class="gt-sep"></div>' +
+      '<div class="gt-num gt-rest" id="gt-rest"></div>' +
+      '<div class="gt-num gt-elapsed" id="gt-elapsed"></div></div>' +
+      '<div class="gt-side"><button type="button" class="gt-circle gt-go" id="gt-start">Start</button></div>' +
+      '</div></div>');
+    var ov = UI.el('<div class="gt-ov hidden"><span></span></div>');
+    cardT.appendChild(ov);
+    var startBtn = cardT.querySelector('#gt-start');
+    var resetBtn = cardT.querySelector('#gt-reset');
+
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function fmt(ms) {
+      ms = Math.max(0, Math.round(ms));
+      return pad2(Math.floor(ms / 60000)) + ':' + pad2(Math.floor(ms / 1000) % 60) + ':' + pad2(Math.floor(ms / 10) % 100);
+    }
+    function paint() {
+      var active = ph === 'paused' ? phBefore : ph;
+      cardT.querySelector('#gt-work').textContent = fmt(active === 'work' ? leftMs : gt.work * 1000);
+      cardT.querySelector('#gt-rest').textContent = fmt(active === 'rest' ? leftMs : gt.rest * 1000);
+      cardT.querySelector('#gt-elapsed').textContent = fmt(elapsedMs);
+      cardT.querySelector('#gt-round').textContent = 'Round ' + round + '/' + gt.rounds;
+    }
+
+    /* sound: tiny WebAudio beeps — offline, no assets */
+    function initAudio() {
+      try {
+        _ac = _ac || new (window.AudioContext || window.webkitAudioContext)();
+        if (_ac.state === 'suspended') _ac.resume();
+      } catch (e) { _ac = null; }
+    }
+    function beep(freq, dur, vol) {
+      if (!_ac) return;
+      try {
+        var o = _ac.createOscillator(), g = _ac.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, _ac.currentTime);
+        g.gain.exponentialRampToValueAtTime(vol || 0.4, _ac.currentTime + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, _ac.currentTime + dur);
+        o.connect(g); g.connect(_ac.destination);
+        o.start(); o.stop(_ac.currentTime + dur + 0.05);
+      } catch (e) { /* silent */ }
+    }
+    function doneChime() { beep(1320, 0.14); setTimeout(function () { beep(1320, 0.14); }, 200); setTimeout(function () { beep(1760, 0.4); }, 400); }
+
+    function overlayNum(n) { ov.classList.remove('hidden'); ov.querySelector('span').textContent = n; }
+    function hideOverlay() { ov.classList.add('hidden'); }
+
+    function stopTick() { if (tick) { clearInterval(tick); tick = null; } }
+    function startTick() {
+      stopTick();
+      lastT = performance.now();
+      tick = setInterval(function () {
+        if (!document.body.contains(cardT)) { stopTick(); return; } /* left the page */
+        var now = performance.now(), dt = now - lastT;
+        lastT = now;
+        if (ph === 'pre') {
+          preLeft -= dt;
+          var n = Math.ceil(preLeft / 1000);
+          if (n < preShown && n >= 1) { preShown = n; overlayNum(n); beep(880, 0.12); }
+          if (preLeft <= 0) {
+            hideOverlay();
+            ph = 'work'; round = 1; leftMs = gt.work * 1000;
+            beep(1320, 0.25);
+          }
+        } else if (ph === 'work' || ph === 'rest') {
+          elapsedMs += dt; leftMs -= dt;
+          /* v0.34 sound cues: 3-2-1 warning beeps before EVERY phase
+             change, plus a soft once-per-second tick during work */
+          var secNow = Math.ceil(leftMs / 1000);
+          if (secNow !== lastSec && leftMs > 0) {
+            lastSec = secNow;
+            if (secNow <= 3 && secNow >= 1) beep(880, 0.12);
+            else if (ph === 'work') beep(1000, 0.04, 0.08);
+          }
+          if (leftMs <= 0) {
+            lastSec = -1;
+            if (ph === 'work') {
+              if (round >= gt.rounds) {
+                ph = 'done'; leftMs = 0; stopTick(); doneChime();
+                startBtn.textContent = 'Start'; resetBtn.disabled = false;
+              } else { ph = 'rest'; leftMs += gt.rest * 1000; beep(440, 0.3); }
+            } else { ph = 'work'; round++; leftMs += gt.work * 1000; beep(1320, 0.25); }
+          }
+        }
+        paint();
+      }, 33);
+    }
+
+    startBtn.addEventListener('click', function () {
+      if (ph === 'idle' || ph === 'done') {
+        initAudio();
+        ph = 'pre'; preLeft = 3000; preShown = 4;
+        round = 0; elapsedMs = 0; leftMs = gt.work * 1000;
+        overlayNum(3); preShown = 3; beep(880, 0.12);
+        startBtn.textContent = 'Pause'; resetBtn.disabled = true;
+        startTick(); paint();
+      } else if (ph === 'pre') {
+        ph = 'idle'; stopTick(); hideOverlay();       /* cancel the 3-2-1 */
+        startBtn.textContent = 'Start'; resetBtn.disabled = false; paint();
+      } else if (ph === 'work' || ph === 'rest') {
+        phBefore = ph; ph = 'paused'; stopTick();
+        startBtn.textContent = 'Start'; resetBtn.disabled = false;
+      } else if (ph === 'paused') {
+        initAudio();
+        ph = phBefore; startBtn.textContent = 'Pause'; resetBtn.disabled = true;
+        startTick();
       }
     });
+    resetBtn.addEventListener('click', function () {
+      if (resetBtn.disabled) return;
+      ph = 'idle'; phBefore = null; round = 0; elapsedMs = 0; leftMs = gt.work * 1000;
+      startBtn.textContent = 'Start'; hideOverlay(); paint();
+    });
+    cardT.querySelector('#gt-int').addEventListener('click', function () { intervalSheet(); });
+    /* v0.34: tap the Round bar to fold the timer down to just that row
+       (it keeps running and counting) — tap again to restore */
+    cardT.querySelector('#gt-round').addEventListener('click', function () {
+      cardT.classList.toggle('gt-min');
+    });
+
+    /* Interval editor: current settings + saved presets ("My workouts") */
+    function intervalSheet() {
+      var presets = ((DB.getSettings() || {}).gymTimerPresets || []).slice();
+      function secOpts(sel) {
+        var out = '';
+        for (var v = 0; v < 60; v += 5) out += '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + v + '</option>';
+        return out;
+      }
+      function minOpts(sel) {
+        var out = '';
+        for (var v = 0; v <= 10; v++) out += '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + v + '</option>';
+        return out;
+      }
+      function roundOpts(sel) {
+        var out = '';
+        for (var v = 1; v <= 30; v++) out += '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + v + '</option>';
+        return out;
+      }
+      /* v0.34: label left, dropdowns right on the same row; bigger text;
+         selects lose the arrow but still open as dropdowns */
+      function msRow(label, id, secs) {
+        return '<div class="gt-row"><span class="gt-row-lab">' + label + '</span>' +
+          '<span class="gt-ms"><select id="' + id + '-m">' + minOpts(Math.floor(secs / 60)) + '</select><span class="sub">min</span>' +
+          '<select id="' + id + '-s">' + secOpts(secs % 60) + '</select><span class="sub">sec</span></span></div>';
+      }
+      var body = UI.el('<div class="gt-sheet-body">' +
+        msRow('Work time', 'gi-w', gt.work) +
+        msRow('Rest time', 'gi-r', gt.rest) +
+        '<div class="gt-row"><span class="gt-row-lab">Rounds</span>' +
+        '<span class="gt-ms"><select id="gi-n">' + roundOpts(gt.rounds) + '</select><span class="sub">rounds</span></span></div>' +
+        '<div class="section-title" style="margin:8px 0 2px">My workouts</div>' +
+        '<div class="gt-presets"></div></div>');
+      function readFields() {
+        var w = (parseInt(body.querySelector('#gi-w-m').value, 10) || 0) * 60 + (parseInt(body.querySelector('#gi-w-s').value, 10) || 0);
+        var r = (parseInt(body.querySelector('#gi-r-m').value, 10) || 0) * 60 + (parseInt(body.querySelector('#gi-r-s').value, 10) || 0);
+        var n = Math.min(30, Math.max(1, parseInt(body.querySelector('#gi-n').value, 10) || 1));
+        return { work: Math.max(5, w), rest: r, rounds: n };
+      }
+      function setFields(p) {
+        body.querySelector('#gi-w-m').value = Math.floor(p.work / 60);
+        body.querySelector('#gi-w-s').value = p.work % 60;
+        body.querySelector('#gi-r-m').value = Math.floor(p.rest / 60);
+        body.querySelector('#gi-r-s').value = p.rest % 60;
+        body.querySelector('#gi-n').value = p.rounds;
+      }
+      function short(secs) { return pad2(Math.floor(secs / 60)) + ':' + pad2(secs % 60); }
+      function drawPresets() {
+        var box = body.querySelector('.gt-presets');
+        box.innerHTML = '';
+        if (!presets.length) { box.appendChild(UI.el('<div class="sub">No presets yet — set the times above and tap "Save preset".</div>')); return; }
+        presets.forEach(function (pr, i) {
+          var cur = readFields();
+          var on = pr.work === cur.work && pr.rest === cur.rest && pr.rounds === cur.rounds;
+          var row = UI.el('<div class="gt-preset"><span class="gt-preset-t">' + short(pr.work) + ' – ' + short(pr.rest) + '</span>' +
+            '<span class="gt-preset-n">' + pr.rounds + ' Rounds' + (on ? ' <span class="gt-dot">●</span>' : '') + '</span>' +
+            '<button type="button" class="btn-icon sm" aria-label="delete preset">✕</button></div>');
+          row.addEventListener('click', function (e) {
+            if (e.target.closest('button')) return;
+            setFields(pr); drawPresets();
+          });
+          row.querySelector('button').addEventListener('click', function () {
+            presets.splice(i, 1);
+            DB.saveSettings({ gymTimerPresets: presets });
+            drawPresets();
+          });
+          box.appendChild(row);
+        });
+      }
+      drawPresets();
+      var sheet = UI.modal('Intervals', body, [
+        { label: 'Cancel' },
+        {
+          label: 'Save preset', onClick: function () {   /* stays open */
+            var cur = readFields();
+            if (!presets.some(function (pr) { return pr.work === cur.work && pr.rest === cur.rest && pr.rounds === cur.rounds; })) {
+              presets.push(cur);
+              DB.saveSettings({ gymTimerPresets: presets });
+            }
+            drawPresets();
+            UI.toast('Preset saved');
+          }
+        },
+        {
+          label: 'Use', primary: true, onClick: function (close) {
+            gt = readFields();
+            DB.saveSettings({ gymTimer: gt });
+            ph = 'idle'; phBefore = null; round = 0; elapsedMs = 0; leftMs = gt.work * 1000;
+            stopTick(); hideOverlay();
+            startBtn.textContent = 'Start'; resetBtn.disabled = false;
+            paint(); close();
+          }
+        }
+      ]);
+      /* v0.34: the editor covers the whole screen — presets need room */
+      sheet.root.querySelector('.modal').classList.add('gt-sheet');
+    }
+
+    paint();
+    return cardT;
   }
 
   return { render: render };

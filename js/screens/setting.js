@@ -113,35 +113,66 @@ Screens.setting = (function () {
     im.querySelector('#st-iq').addEventListener('change', function (e) { DB.saveSettings({ imageQuality: e.target.value }); });
     pad.appendChild(im);
 
-    /* ---- backup & sync ---- */
-    pad.appendChild(UI.el('<div class="section-title">Backup & sync</div>'));
+    /* ---- backup (v0.32): four tiers, smallest scope -> everything ---- */
+    pad.appendChild(UI.el('<div class="section-title">Backup</div>'));
     var bk = UI.el('<div class="card"></div>');
-    bk.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Sync file = all data + only media added since the last export (small, for regular PC ↔ phone moves). Full backup = everything incl. all media. Import <b>merges</b>: newest change wins per record, deletions carry over, nothing is lost.</div>'));
-    var expSyncBtn = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
+    var canFs = !!(window.Native && Native.isNative && Native.isNative() &&
+                   Native.canSaveFiles && Native.canSaveFiles());
+    var whereTxt = canFs
+      ? 'Files are saved to <b>Documents/S26-Alef-Fit</b> on this phone.'
+      : (window.Native && Native.isNative && Native.isNative()
+        ? '⚠ Update the app (apk-latest) to enable saving files.'
+        : 'Files go to the browser\'s Downloads folder.');
+    bk.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Four backups, smallest to everything. ' +
+      whereTxt + ' The Import button below restores any of them — it detects the file type.</div>'));
+    function bkBtn(label, primary) {
+      return UI.el('<button class="btn ' + (primary ? 'btn-primary ' : '') + 'btn-block" style="margin-bottom:8px">' +
+        UI.icon('download') + ' ' + label + '</button>');
+    }
+    /* 1 — Google Drive sync info (connection settings; includes the secret) */
+    var bk1 = bkBtn('1 · Google Drive sync info');
+    bk1.addEventListener('click', function () {
+      DB.exportSyncInfo().then(function (data) {
+        UI.download('alef-fit-1-sync-info-' + DB.todayISO() + '.json', JSON.stringify(data, null, 2));
+      });
+    });
+    bk.appendChild(bk1);
+    /* 2 — Vault only (S26 only: the sole way Vault leaves the device) */
+    if ((s.deviceId || '') !== 'PC') {
+      var bk2 = bkBtn('2 · Vault only');
+      bk2.addEventListener('click', function () {
+        DB.exportVault().then(function (data) {
+          UI.download('alef-fit-2-vault-' + DB.todayISO() + '.json', JSON.stringify(data));
+        });
+      });
+      bk.appendChild(bk2);
+    }
+    /* 3 — Alef.do tasks, Vault excluded (tier 2 owns it) */
+    var bk3 = bkBtn('3 · Alef.do tasks (no Vault)');
+    bk3.addEventListener('click', function () {
+      DB.exportTodoBackup().then(function (data) {
+        UI.download('alef-fit-3-alefdo-tasks-' + DB.todayISO() + '.json', JSON.stringify(data));
+      });
+    });
+    bk.appendChild(bk3);
+    /* 4 — everything incl. media (Vault excluded by design) */
+    var bk4 = bkBtn('4 · Full backup (all data)', true);
+    bk4.addEventListener('click', function () {
+      DB.exportAll({ media: 'all' }).then(function (data) {
+        UI.download('alef-fit-4-full-backup-' + DB.todayISO() + '.json', JSON.stringify(data));
+      });
+    });
+    bk.appendChild(bk4);
+    /* device transfer (advanced): small PC <-> phone merge file */
+    bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 8px">Device transfer (advanced): sync file = all data + only media added since the last export — for manual PC ↔ phone moves.</div>'));
+    var expSyncBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
     expSyncBtn.addEventListener('click', function () {
       DB.exportAll({ media: 'since' }).then(function (data) {
-        UI.download('alef-fit-sync-' + DB.todayISO() + '.json', JSON.stringify(data));
-        UI.toast('Sync file exported (' + data.stores.media.length + ' new media)');
+        UI.download('alef-fit-transfer-sync-' + DB.todayISO() + '.json', JSON.stringify(data));
       });
     });
     bk.appendChild(expSyncBtn);
-    var expBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export full backup</button>');
-    expBtn.addEventListener('click', function () {
-      DB.exportAll({ media: 'all' }).then(function (data) {
-        UI.download('alef-fit-backup-' + DB.todayISO() + '.json', JSON.stringify(data));
-        UI.toast('Full backup exported to Downloads');
-      });
-    });
-    bk.appendChild(expBtn);
-    var expTdBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export To-do backup (this device, incl. Vault)</button>');
-    expTdBtn.addEventListener('click', function () {
-      DB.exportTodoBackup().then(function (data) {
-        UI.download('alef-fit-todo-' + DB.todayISO() + '.json', JSON.stringify(data));
-        UI.toast('To-do backup exported (' + data.todos.length + ' tasks) — keep it private, it contains the Vault');
-      });
-    });
-    bk.appendChild(expTdBtn);
-    var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import / merge file</button>');
+    var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup file</button>');
     var impFile = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
     impBtn.addEventListener('click', function () { impFile.click(); });
     impFile.addEventListener('change', function (e) {
@@ -151,6 +182,21 @@ Screens.setting = (function () {
       fr.onload = function () {
         var json;
         try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid backup file'); return; }
+        /* v0.32: one import button — route by the file's own type stamp */
+        if (json && json.kind === 'syncinfo-backup') {
+          DB.importSyncInfo(json).then(function (n) {
+            UI.toast('Sync settings restored (' + n + ' values) — tap Sync now to reconnect');
+            App.route();
+          }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          return;
+        }
+        if (json && json.kind === 'vault-backup') {
+          DB.importVault(json).then(function (c) {
+            UI.toast('Vault restored: +' + c.added + ' entries, added as new (' + c.stamp + ')');
+            App.route();
+          }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          return;
+        }
         if (json && json.app === 'alef.fit-todo') {
           DB.importTodoBackup(json).then(function (c) {
             UI.toast('To-do restored: +' + c.added + ' new, ' + c.updated + ' updated' + (c.vault ? ' (' + c.vault + ' Vault)' : ''));

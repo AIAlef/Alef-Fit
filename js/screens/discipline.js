@@ -227,7 +227,15 @@ Screens.discipline = (function () {
             if (c.id === 'today') return d.now || home === 'today';
             return !d.now && home === c.id;
           });
-          if (!inCat.length && !gInCat.length) zone.appendChild(UI.el('<div class="cat-empty sub">empty</div>'));
+          if (!inCat.length && !gInCat.length) {
+            /* v0.32: tappable empty row — one touch opens quick-add with
+               THIS list preselected (v0.34: looks like the plain old
+               "empty" label again, per Alef) */
+            var emptyBtn = UI.el('<button type="button" class="cat-empty sub" aria-label="Add a task to ' +
+              UI.esc(c.name || 'Vault') + '">empty</button>');
+            emptyBtn.addEventListener('click', function () { quickAdd(c.id); });
+            zone.appendChild(emptyBtn);
+          }
           inCat.forEach(function (t) { zone.appendChild(taskRow(t, showTags)); });
           gInCat.forEach(function (g) {
             var gr = UI.el('<div class="list-item todo-item td-ghost"><input type="checkbox" disabled>' +
@@ -246,7 +254,7 @@ Screens.discipline = (function () {
       var exp = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export Vault backup</button>');
       exp.addEventListener('click', function () {
         DB.exportVault().then(function (data) {
-          UI.download('alef-fit-vault-' + DB.todayISO() + '.json', JSON.stringify(data));
+          UI.download('alef-fit-2-vault-' + DB.todayISO() + '.json', JSON.stringify(data));
           UI.toast('Vault backup exported (' + data.vault.length + ' entr' + (data.vault.length === 1 ? 'y' : 'ies') + ') — in Downloads');
         });
       });
@@ -437,11 +445,20 @@ Screens.discipline = (function () {
       return item;
     }
 
-    /* quick add: category chips + "I want to..." input, keyboard-ready */
-    function quickAdd() {
+    /* quick add: category chips + "I want to..." input, keyboard-ready.
+       v0.32: optional presetCat preselects a list (tap on an empty list). */
+    function quickAdd(presetCat) {
+      if (typeof presetCat !== 'string') presetCat = null; /* FAB passes the click event */
       var exist = document.querySelector('.qa-panel');
-      if (exist) { exist.querySelector('.qa-input').focus(); return; }
-      var selCat = 'today';
+      if (exist) {
+        if (presetCat) {
+          var pchip = exist.querySelector('.qa-chip[data-c="' + presetCat + '"]');
+          if (pchip) pchip.click();
+        }
+        exist.querySelector('.qa-input').focus();
+        return;
+      }
+      var selCat = (presetCat && presetCat !== 'now') ? presetCat : 'today';
       var nowOn = false;
       var p = UI.el('<div class="qa-panel"><div class="qa-cats"></div>' +
         '<div class="qa-row"><input type="text" class="qa-input" placeholder="I want to..." enterkeyhint="done">' +
