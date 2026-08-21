@@ -266,16 +266,31 @@ Screens.setting = (function () {
     pad.appendChild(UI.el('<div class="section-title">Google Drive sync</div>'));
     var sy = UI.el('<div class="card"></div>');
     sy.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Two-way sync through your Google Drive (hidden app folder): pulls the other device\'s changes, merges, pushes yours — media transfers only what\'s missing. One-time setup: a Google OAuth client ID (see docs/SYNC-SETUP.md in the project).</div>'));
+    /* v0.31: client ID in a wrapping textarea (full value visible for easy
+       recheck); secret in a full-width field with an eye reveal toggle. */
     var cidRow = UI.el('<label class="field"><span class="field-label">Google OAuth client ID</span>' +
-      '<input type="text" id="sy-cid" placeholder="…apps.googleusercontent.com" value="' + UI.esc(s.gdriveClientId || '') + '"></label>');
+      '<textarea id="sy-cid" class="cred-mono cred-id" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" ' +
+      'placeholder="…apps.googleusercontent.com">' + UI.esc(s.gdriveClientId || '') + '</textarea></label>');
     cidRow.querySelector('#sy-cid').addEventListener('change', function (e) {
       DB.saveSettings({ gdriveClientId: e.target.value.trim() });
     });
     sy.appendChild(cidRow);
     var secRow = UI.el('<label class="field"><span class="field-label">Google client secret</span>' +
-      '<input type="password" id="sy-sec" placeholder="GOCSPX-…" value="' + UI.esc(s.gdriveClientSecret || '') + '"></label>');
+      '<span class="cred-secret">' +
+      '<input type="password" id="sy-sec" class="cred-mono" placeholder="GOCSPX-…" spellcheck="false" autocapitalize="off" autocomplete="off" value="' + UI.esc(s.gdriveClientSecret || '') + '">' +
+      '<button type="button" class="btn-icon" id="sy-sec-eye" aria-label="Show secret">' + UI.icon('eye') + '</button>' +
+      '</span></label>');
     secRow.querySelector('#sy-sec').addEventListener('change', function (e) {
       DB.saveSettings({ gdriveClientSecret: e.target.value.trim() });
+    });
+    secRow.querySelector('#sy-sec-eye').addEventListener('click', function (e) {
+      e.preventDefault(); /* inside a <label> — stop it refocusing the input */
+      var inp = secRow.querySelector('#sy-sec');
+      var btn = secRow.querySelector('#sy-sec-eye');
+      var show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      btn.innerHTML = UI.icon(show ? 'eyeOff' : 'eye');
+      btn.setAttribute('aria-label', show ? 'Hide secret' : 'Show secret');
     });
     sy.appendChild(secRow);
     var syBtn = UI.el('<button class="btn btn-primary btn-block">' + UI.icon('upload') + ' Sync now</button>');
