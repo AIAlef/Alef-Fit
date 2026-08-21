@@ -471,11 +471,13 @@ Screens.program = (function () {
       function findLog(d) {
         return history.find(function (h) { return h.date === d; }) || null;
       }
-      function lastSets() {
+      function lastSetsInfo() {
         var hs = history.filter(function (h) { return !currentLog || h.id !== currentLog.id; });
         hs.sort(function (a, b) { return a.date.localeCompare(b.date); });
-        return hs.length ? hs[hs.length - 1].sets : [];
+        return hs.length ? { sets: hs[hs.length - 1].sets, date: hs[hs.length - 1].date }
+                         : { sets: [], date: null };
       }
+      var suppressGhost = false;   /* v0.35.4: after Reset show an EMPTY grid */
       function flash(msg) {
         var st = document.getElementById('lg-status');
         if (!st) return;
@@ -523,6 +525,7 @@ Screens.program = (function () {
         if (now === dateVal && now === today) return false;
         today = now;
         dateVal = now;
+        suppressGhost = false;
         currentLog = findLog(dateVal);
         var chip = document.getElementById('lg-dchip');
         var din = document.getElementById('lg-date');
@@ -536,13 +539,47 @@ Screens.program = (function () {
         var side = UI.el('<div class="rec-side">' +
           '<div class="rec-date rec-date-input"><span id="lg-dchip">' + dmy(dateVal) + '</span>' +
           '<input type="date" id="lg-date" value="' + dateVal + '" max="' + today + '"></div>' +
-          '<button class="rec-del" id="lg-del" aria-label="delete record of this date">−</button></div>');
+          '<button class="rec-del" id="lg-del" aria-label="delete record of this date">−</button>' +
+          '<button class="rec-del rec-reset" id="lg-reset" aria-label="reset — clear all Wt and Rep of this date">↺</button></div>');
         row.appendChild(side);
         currentLog = findLog(dateVal);
-        if (currentLog) t = UI.recTable(currentLog.sets, { minCols: targetSets, onChange: onTableChange });
-        else t = UI.recTable(lastSets(), { minCols: targetSets, ghost: true, onChange: onTableChange });
+        var ghostFrom = null;
+        if (currentLog) {
+          t = UI.recTable(currentLog.sets, { minCols: targetSets, onChange: onTableChange });
+        } else if (suppressGhost) {
+          t = UI.recTable([], { minCols: targetSets, onChange: onTableChange });
+        } else {
+          var ls = lastSetsInfo();
+          ghostFrom = ls.sets.length ? ls.date : null;
+          t = UI.recTable(ls.sets, { minCols: targetSets, ghost: true, onChange: onTableChange });
+        }
         row.appendChild(t.root);
         card.appendChild(row);
+        /* v0.35.4: ghost prefill looked like a saved record (e.g. after
+           moving a record's date in Retro) — say plainly what it is */
+        if (ghostFrom) {
+          card.appendChild(UI.el('<div class="sub lg-ghosthint">Grey = last session (' + dmy(ghostFrom) +
+            '), NOT saved for ' + dmy(dateVal) + ' — type to record, or ↺ to clear.</div>'));
+        }
+        side.querySelector('#lg-reset').addEventListener('click', function () {
+          UI.confirm('Reset ' + dmy(dateVal) + '? All Wt/Rep numbers shown will be cleared' +
+            (currentLog ? ' and its saved record deleted' : '') + '.', 'Reset').then(function (ok) {
+            if (!ok) return;
+            clearTimeout(saveTimer); saveTimer = null;
+            var fin = Promise.resolve();
+            if (currentLog) {
+              var dead = currentLog;
+              currentLog = null;
+              history = history.filter(function (h) { return h.id !== dead.id; });
+              fin = DB.del('logs', dead.id);
+            }
+            fin.then(function () {
+              suppressGhost = true;
+              buildEntry(); drawPast();
+              UI.toast('Cleared — empty boxes for ' + dmy(dateVal));
+            });
+          });
+        });
         side.querySelector('#lg-date').addEventListener('change', function (e) {
           var v = e.target.value;
           if (!v) return;
@@ -550,6 +587,7 @@ Screens.program = (function () {
           flushPending();
           dateVal = v;
           dateManual = true;   /* respect Alef's explicit choice from here on */
+          suppressGhost = false;
           buildEntry();
           drawPast();
         });
