@@ -5,7 +5,7 @@
 
 var DB = (function () {
   var DB_NAME = 'alef-fit';
-  var DB_VERSION = 4;
+  var DB_VERSION = 5;
   var _db = null;
 
   /* Fixed category order = user priority: large → medium (top-down,
@@ -118,6 +118,18 @@ var DB = (function () {
     if (v === 4) {
       /* PC proposal pipeline: staged changes awaiting review on the S26 */
       db.createObjectStore('proposals', { keyPath: 'id' });
+    }
+    if (v === 5) {
+      /* v0.37: refreshed exercise library (145 bundled-photo exercises).
+         Drop the old placeholder exercises + sample programs and their seed
+         flags so boot re-seeds from the new SEED_EXERCISES / SEED_PROGRAMS.
+         Logs, todos, notes and settings are untouched. */
+      try {
+        tx.objectStore('exercises').clear();
+        tx.objectStore('programs').clear();
+        tx.objectStore('meta').delete('seeded');
+        tx.objectStore('meta').delete('seededPrograms');
+      } catch (e) { /* fresh install: nothing to clear yet */ }
     }
   }
 
@@ -311,6 +323,12 @@ var DB = (function () {
   /* exercise media items {type, dataUrl?|mediaId, name?, crop?} → stored form */
   function internExMedia(list) {
     return Promise.all((list || []).map(function (m) {
+      if (m.src) {                              /* bundled app image — keep the path ref */
+        var b = { type: m.type || 'image', src: m.src };
+        if (m.crop) b.crop = m.crop;
+        if (m.name) b.name = m.name;
+        return Promise.resolve(b);
+      }
       if (m.dataUrl) {
         return internMedia(m.dataUrl, m.type).then(function (id) {
           var c = Object.assign({}, m, { mediaId: id });
@@ -327,7 +345,9 @@ var DB = (function () {
     var arr = Array.isArray(rows) ? rows : [rows];
     return Promise.all(arr.map(function (x) {
       return Promise.all((x.media || []).map(function (m) {
-        if (m.dataUrl || !m.mediaId) return null;
+        if (m.dataUrl) return null;
+        if (m.src) { m.dataUrl = m.src; return null; }   /* bundled app image path */
+        if (!m.mediaId) return null;
         return mediaUrl(m.mediaId).then(function (u) { m.dataUrl = u; });
       }));
     })).then(function () { return rows; });
@@ -526,7 +546,7 @@ var DB = (function () {
         var puts = (window.SEED_EXERCISES || []).map(function (s, i) {
           return put('exercises', {
             id: 'seed-' + i, name: s.n, categoryId: s.c, muscles: s.m,
-            steps: s.s, media: [], seeded: true, createdAt: now, updatedAt: now
+            steps: s.s, media: s.media || [], seeded: true, createdAt: now, updatedAt: now
           });
         });
         return Promise.all(puts).then(function () {

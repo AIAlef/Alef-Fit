@@ -1,6 +1,6 @@
 /* Alef.Fit service worker — cache-first app shell for offline use.
    Bump CACHE on every release (matches APP_VERSION). */
-var CACHE = 'alef-fit-v0.36.0';
+var CACHE = 'alef-fit-v0.37.0';
 var ASSETS = [
   './', './index.html', './oauth.html', './css/app.css', './manifest.webmanifest',
   './js/db.js', './js/native.js', './js/ui.js', './js/seed-data.js', './js/sync.js', './js/devtext.js', './js/app.js',
@@ -33,7 +33,17 @@ self.addEventListener('activate', function (e) {
 });
 
 self.addEventListener('fetch', function (e) {
+  if (e.request.method !== 'GET') return;
   e.respondWith(caches.match(e.request).then(function (hit) {
-    return hit || fetch(e.request);
+    if (hit) return hit;
+    return fetch(e.request).then(function (res) {
+      /* runtime-cache the bundled exercise photos on first view so they
+         work offline without precaching all 345 up front */
+      if (res && res.ok && e.request.url.indexOf('/exercise-img/') !== -1) {
+        var copy = res.clone();
+        caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+      }
+      return res;
+    });
   }));
 });
