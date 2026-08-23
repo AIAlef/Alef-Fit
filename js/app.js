@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.37.0';
+var APP_VERSION = '0.39.0';
 
 var App = (function () {
 
@@ -130,16 +130,25 @@ var App = (function () {
         return DB.seedProgramsIfEmpty().then(function () { return seeded; });
       })
       .then(function (seeded) {
-        /* landing page: where the app opens when launched without a hash */
+        var st0 = DB.getSettings() || {};
+        /* landing page: where the app opens when launched without a hash.
+           v0.39: an UNCLAIMED fresh install boots into the Setup wizard. */
         if (!location.hash) {
           var LANDING = { todo: '#/discipline/todo', exercise: '#/exercise', discipline: '#/discipline', program: '#/program', retro: '#/retro', setting: '#/setting' };
-          var lp = LANDING[(DB.getSettings() || {}).landingPage || 'todo'] || '#/discipline/todo';
+          var lp = LANDING[st0.landingPage || 'todo'] || '#/discipline/todo';
+          if (!st0.setupDone && !st0.deviceId && window.Screens && Screens.setup) lp = '#/setup';
           try { history.replaceState(null, '', location.pathname + location.search + lp); }
           catch (e2) { location.hash = lp; }
         }
         route();
         if (seeded) UI.toast('Starter library loaded: ' + (window.SEED_EXERCISES || []).length + ' exercises');
-        if (window.Native) Native.init();   // APK: schedule real background alarms
+        /* v0.39: a superseded (retired) install schedules NO background
+           alarms — the newer main owns them. Data stays readable. */
+        if (DB.isSuperseded && DB.isSuperseded()) {
+          UI.toast('A newer ' + (st0.deviceId || 'main') + ' has taken over — this copy no longer shares with Claude or schedules alarms');
+        } else if (window.Native) {
+          Native.init();   // APK: schedule real background alarms
+        }
         if (window.Sync && Sync.autoInit) Sync.autoInit();
         setInterval(tickAlerts, 20000);
         setTimeout(function () { DB.gcMedia(); }, 4000);

@@ -531,6 +531,14 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .gt-preset-n { margin-left: auto; color: var(--text2); }
 .gt-dot { color: #35c76a; }
 
+/* v0.39: Setup wizard — highlighted first step + retired banner */
+.su-glow { box-shadow: 0 0 0 2px var(--accent), 0 0 18px 2px var(--accent-soft); animation: suPulse 1.6s ease-in-out infinite; }
+@keyframes suPulse { 50% { box-shadow: 0 0 0 2px var(--accent), 0 0 26px 6px var(--accent-soft); } }
+.su-retired {
+  border: 1px solid var(--danger); border-radius: var(--r-md);
+  padding: 8px 10px; margin-bottom: 10px; color: var(--danger);
+}
+
 /* v0.32: empty list rows are tappable — one touch adds a task there.
    v0.34: styled exactly like the old plain "empty" label, per Alef. */
 button.cat-empty {

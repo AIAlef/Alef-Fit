@@ -288,6 +288,9 @@ window.Sync = (function () {
   }
 
   function pushClaudeShare() {
+    /* v0.39: a superseded (retired) install must never write the share
+       or ack the inbox — the new main owns those. */
+    if (DB.isSuperseded && DB.isSuperseded()) return Promise.resolve(null);
     /* v0.31: inbox FIRST, share second — the uploaded share then already
        includes whatever Claude's batch just changed (no stale window). */
     return ensureShareFolder().then(function (folderId) {
@@ -306,6 +309,7 @@ window.Sync = (function () {
   function claudeRoundTrip(opts) {
     opts = opts || {};
     var st = DB.getSettings() || {};
+    if (DB.isSuperseded && DB.isSuperseded()) return Promise.resolve({ retired: true });
     if (!st.claudeShareOn) return Promise.resolve({ off: true });
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve({ offline: true });
     if (_busy || _rtBusy) return Promise.resolve({ busy: true });
@@ -354,6 +358,7 @@ window.Sync = (function () {
 
   function fastSharePush() {
     var st = DB.getSettings() || {};
+    if (DB.isSuperseded && DB.isSuperseded()) { _shareDirty = false; return; }
     if (!st.claudeShareOn) { _shareDirty = false; return; }
     if (_busy || _rtBusy) { armFastShare(); return; }   /* a sync is running — retry after */
     canAuto().then(function (ok) {

@@ -273,6 +273,24 @@ Screens.setting = (function () {
     /* ---- device & sync ---- */
     pad.appendChild(UI.el('<div class="section-title">Device & sync</div>'));
     var dv = UI.el('<div class="card"></div>');
+    /* v0.39: succession — retired banner + take-back / claim button */
+    if (DB.isSuperseded && DB.isSuperseded()) {
+      var mc = s.mainClaim || {};
+      var when = mc.at ? new Date(mc.at).toLocaleDateString() : '';
+      dv.appendChild(UI.el('<div class="sub su-retired">⚠ A newer ' + UI.esc(s.deviceId) +
+        ' took over' + (when ? ' on ' + UI.esc(when) : '') + ' — this copy no longer writes the Claude share or schedules alarms. Data stays readable.</div>'));
+    }
+    if (s.deviceId) {
+      var claimBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">Make THIS the main ' + UI.esc(s.deviceId) + '</button>');
+      claimBtn.addEventListener('click', function () {
+        UI.confirm('Claim the main ' + s.deviceId + ' role for THIS install? Any other ' + s.deviceId + ' retires on its next sync.', 'Claim')
+          .then(function (ok) {
+            if (!ok) return;
+            DB.claimRole(s.deviceId).then(function () { UI.toast('This app is now the main ' + s.deviceId); App.route(); });
+          });
+      });
+      dv.appendChild(claimBtn);
+    }
     dv.appendChild(UI.el(UI.field('This device is',
       '<select id="dv-id"><option value="">(not set)</option>' +
       '<option value="S26"' + (s.deviceId === 'S26' ? ' selected' : '') + '>S26 — phone (primary)</option>' +
@@ -371,8 +389,19 @@ Screens.setting = (function () {
     }
     syBtn.addEventListener('click', function () { runSync(); });
     syWkBtn.addEventListener('click', function () { runSync('workout'); });
-    sy.appendChild(syBtn);
-    sy.appendChild(syWkBtn);
+    /* v0.39: the PC leads with Sync Workout — its edits travel as
+       proposals, and workout content is what it moves most */
+    if ((s.deviceId || '') === 'PC') {
+      syWkBtn.classList.add('btn-primary');
+      syWkBtn.style.marginBottom = '8px';
+      syBtn.classList.remove('btn-primary');
+      syBtn.style.marginBottom = '0';
+      sy.appendChild(syWkBtn);
+      sy.appendChild(syBtn);
+    } else {
+      sy.appendChild(syBtn);
+      sy.appendChild(syWkBtn);
+    }
     sy.appendChild(syStatus);
     pad.appendChild(sy);
 

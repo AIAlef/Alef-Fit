@@ -5,7 +5,7 @@
 
 var DB = (function () {
   var DB_NAME = 'alef-fit';
-  var DB_VERSION = 5;
+  var DB_VERSION = 6;
   var _db = null;
 
   /* Fixed category order = user priority: large → medium (top-down,
@@ -30,8 +30,12 @@ var DB = (function () {
   var DATA_STORES = ['exercises', 'programs', 'logs', 'todos', 'notes', 'folders', 'tags', 'alarms', 'weights', 'walks', 'proposals'];
   var STORES = DATA_STORES.concat(['meta']);
 
-  /* settings keys that stay per-device (never overwritten by sync/merge) */
-  var DEVICE_KEYS = ['textScale', 'mediaSize', 'alertRev', 'mediaRev', 'devTextEdit', 'todoCompact', 'deviceId', 'autoSync', 'pcProposals', '_ts'];
+  /* settings keys that stay per-device (never overwritten by sync/merge).
+     v0.39: claudeShareOn/InboxOn/Direct became device-local — exactly ONE
+     device (the main S26) may write the Claude share / ack the inbox, so
+     those switches must never ride the settings merge to another device. */
+  var DEVICE_KEYS = ['textScale', 'mediaSize', 'alertRev', 'mediaRev', 'devTextEdit', 'todoCompact', 'deviceId', 'autoSync', 'pcProposals',
+    'instanceId', 'setupDone', 'claudeShareOn', 'claudeInboxOn', 'claudeDirect', '_ts'];
 
   var DEFAULT_SETTINGS = {
     theme: 'system',            // system | light | dark
@@ -62,6 +66,9 @@ var DB = (function () {
     claudeShareWorkout: true,   // Claude share: include programs, logs, incline walks
     claudeInboxOn: true,        // Claude may leave suggestions (reviewed on the S26)
     claudeDirect: true,         // Alef.Lucilius: batches marked mode:'direct' apply without review
+    instanceId: '',             // v0.39: random id of THIS install (device-local)
+    setupDone: false,           // v0.39: first-run Setup wizard completed (device-local)
+    mainClaim: null,            // v0.39: SYNCED succession stamp {role, instanceId, at}
     _ts: {}                     // per-key change timestamps (for settings merge)
   };
 
@@ -130,6 +137,16 @@ var DB = (function () {
         tx.objectStore('meta').delete('seeded');
         tx.objectStore('meta').delete('seededPrograms');
       } catch (e) { /* fresh install: nothing to clear yet */ }
+    }
+    if (v === 6) {
+      /* v0.38: added muscle groups + technique/caution to every seeded
+         exercise. Clear exercises and the seed flag so boot re-seeds with the
+         new detail. Programs (and their exercise links), logs, todos, notes
+         and settings are untouched — the exercise order/ids are unchanged. */
+      try {
+        tx.objectStore('exercises').clear();
+        tx.objectStore('meta').delete('seeded');
+      } catch (e) { /* nothing to clear */ }
     }
   }
 
@@ -463,6 +480,11 @@ var DB = (function () {
         _settings.saveToPhotos = true;
         dirty = true;
       }
+      /* v0.39: every install gets a stable random identity once */
+      if (!_settings.instanceId) {
+        _settings.instanceId = uid();
+        dirty = true;
+      }
       if (dirty) {
         return put('meta', { key: 'settings', value: _settings }).then(function () { return _settings; });
       }
@@ -474,6 +496,34 @@ var DB = (function () {
     Object.keys(patch).forEach(function (k) { if (k !== '_ts') _settings._ts[k] = now; });
     Object.assign(_settings, patch);
     return put('meta', { key: 'settings', value: _settings });
+  }
+
+  /* ---- v0.39: app roles + succession (docs/ROLES-SETUP-PLAN.md) ----
+     claimRole writes the SYNCED succession stamp and applies the role's
+     defaults; isSuperseded is true when a NEWER install claimed MY role —
+     the retired copy stops writing the Claude share / scheduling alarms. */
+  function claimRole(role) {
+    var patch = {
+      deviceId: role, setupDone: true,
+      mainClaim: { role: role, instanceId: _settings.instanceId, at: Date.now() }
+    };
+    if (role === 'S26') {
+      patch.claudeShareOn = true;
+      patch.claudeInboxOn = true;
+      patch.claudeDirect = true;
+      patch.claudeShareTodo = true;
+      patch.claudeShareWorkout = false;   /* Alef's standing choice */
+    } else if (role === 'PC') {
+      patch.pcProposals = true;
+      patch.claudeShareOn = false;
+    }
+    return saveSettings(patch);
+  }
+  function isSuperseded() {
+    var s = _settings || {};
+    return !!(s.mainClaim && s.deviceId && s.mainClaim.role === s.deviceId &&
+      s.mainClaim.instanceId && s.instanceId &&
+      s.mainClaim.instanceId !== s.instanceId);
   }
 
   /* ---- program categories (user-editable, ordered names) ---- */
@@ -1299,6 +1349,7 @@ var DB = (function () {
     getProgramCats: getProgramCats, saveProgramCats: saveProgramCats,
     catById: function (id) { return CATEGORIES.find(function (c) { return c.id === id; }); },
     loadSettings: loadSettings, getSettings: getSettings, saveSettings: saveSettings,
+    claimRole: claimRole, isSuperseded: isSuperseded,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     seedIfEmpty: seedIfEmpty, seedProgramsIfEmpty: seedProgramsIfEmpty,
     getTodoCats: getTodoCats, saveTodoCats: saveTodoCats, migrateTodosOnce: migrateTodosOnce,
