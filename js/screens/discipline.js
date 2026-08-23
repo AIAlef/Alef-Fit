@@ -73,12 +73,14 @@ Screens.discipline = (function () {
     ['high', 'High', 'red'],
     ['medium', 'Medium', 'blue'],
     ['low', 'Low', 'yellow'],
-    ['none', 'Uncategorized', 'grey'],
-    ['monkey', 'Monkey Business', 'purple']
+    ['none', 'N/A', 'grey'],
+    ['monkey', 'Never', 'purple']
   ];
+  /* v0.40: rank for the Today sort — Now tasks order by rating */
+  var TD_PRIO_RANK = { highest: 0, vhigh: 1, high: 2, medium: 3, low: 4, none: 5, monkey: 6 };
   function prioName(id) {
     var p = TD_PRIOS.filter(function (x) { return x[0] === id; })[0];
-    return p ? p[1] : 'Uncategorized';
+    return p ? p[1] : 'N/A';
   }
 
   var _tdFilter = []; /* active tag filter (session only) */
@@ -152,7 +154,11 @@ Screens.discipline = (function () {
 
     function draw() {
       wrap.innerHTML = '';
-      Promise.all([DB.getTodoCats(), DB.all('todos'), DB.byIndex('tags', 'module', 'todo'), DB.all('proposals')]).then(function (res) {
+      /* v0.40: hour-tagged tasks whose time has passed flip to Now on every
+         list draw, not only at app boot (promoteNowDue no-ops on the PC) */
+      DB.promoteNowDue().then(function () {
+        return Promise.all([DB.getTodoCats(), DB.all('todos'), DB.byIndex('tags', 'module', 'todo'), DB.all('proposals')]);
+      }).then(function (res) {
         /* Vault: fixed private list injected after PROJECT (not part of the
            editable/synced list order). S26 only — hidden on the PC so the
            private data has exactly one home. */
@@ -208,6 +214,18 @@ Screens.discipline = (function () {
             if (a.done) return (a.doneAt || 0) - (b.doneAt || 0);      /* newest finished lowest */
             var an = (a.now || a.cat === 'now') ? 1 : 0, bn = (b.now || b.cat === 'now') ? 1 : 0;
             if (an !== bn) return bn - an;                             /* Now on top of Today */
+            if (c.id === 'today') {
+              /* v0.40: day arrangement — Now tasks rank by priority rating;
+                 below them, hour-tagged tasks ascend by time, rest keep order */
+              if (an) {
+                var pr = (TD_PRIO_RANK[a.prio] !== undefined ? TD_PRIO_RANK[a.prio] : 5) -
+                         (TD_PRIO_RANK[b.prio] !== undefined ? TD_PRIO_RANK[b.prio] : 5);
+                if (pr) return pr;
+              } else {
+                var at2 = a.nowAt || '99:99', bt2 = b.nowAt || '99:99';
+                if (at2 !== bt2) return at2 < bt2 ? -1 : 1;
+              }
+            }
             return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0);
           });
           var st;
@@ -325,9 +343,19 @@ Screens.discipline = (function () {
         }).join('');
       }
       var when = t.dueDate ? (t.allDay ? UI.fmtDate(t.dueDate) : UI.fmtDateTime(t.dueDate, t.time)) : '';
+      /* v0.40: hour badge (arranged time) + priority color dot after the text */
+      var marks = '';
+      if (!t.done && t.nowAt && !t.now) {
+        var hLbl = /^\d\d:00$/.test(t.nowAt) ? t.nowAt.slice(0, 2) : t.nowAt;
+        marks += ' <span class="td-hrmark" title="Do at ' + UI.esc(t.nowAt) + '">' + UI.esc(hLbl) + '</span>';
+      }
+      if (!t.done && t.prio && t.prio !== 'none') {
+        var pd = TD_PRIOS.filter(function (x) { return x[0] === t.prio; })[0];
+        if (pd) marks += ' <span class="td-pdot td-b-' + pd[2] + '" title="' + pd[1] + '"></span>';
+      }
       var item = UI.el('<div class="list-item todo-item' + (t.done ? ' li-done' : '') + '" data-id="' + t.id + '">' +
         '<input type="checkbox" ' + (t.done ? 'checked ' : '') + (t.locked ? 'disabled ' : '') + 'aria-label="done">' +
-        '<span class="li-main"><span class="li-title">' + UI.esc(t.title) + (t.locked ? ' <span class="td-lockmark">🔒</span>' : '') + stamps + '</span>' +
+        '<span class="li-main"><span class="li-title">' + UI.esc(t.title) + (t.locked ? ' <span class="td-lockmark">🔒</span>' : '') + marks + stamps + '</span>' +
         (when ? '<span class="li-sub">' + UI.esc(when) + '</span>' : '') + '</span>' +
         (subs.length ? '<span class="td-subbadge">' + UI.icon('stack') + '<span>' + doneSubs + '/' + subs.length + '</span></span>' : '') +
         (t.done && !t.locked ? '<button class="td-del" aria-label="delete">✕</button>' : '') +
@@ -549,6 +577,15 @@ Screens.discipline = (function () {
       badges.querySelectorAll('.td-badge').forEach(function (x) { x.classList.remove('on'); });
       b.classList.add('on');
       setPrioLabel();
+      /* v0.40: rating "Never" files the task into the NEVER list (Vault
+         entries stay put — nothing may move OUT of the Vault by side effect) */
+      if (t.prio === 'monkey' && t.cat !== 'vault' && t.cat !== 'never') {
+        t.cat = 'never';
+        t.now = false;
+        t.nowAt = null;
+        refreshTags();
+        UI.toast('Rated Never — moves to the NEVER list on save');
+      }
     });
     prioRow.appendChild(badges);
     prioRow.appendChild(prioVal);
@@ -565,12 +602,28 @@ Screens.discipline = (function () {
         var nowTg = UI.el('<button type="button" class="chip td-now-chip' + (t.now ? ' on' : '') + '">Now' + (t.now ? ' ✓' : '') + '</button>');
         nowTg.addEventListener('click', function () {
           t.now = !t.now;
-          nowTg.classList.toggle('on', t.now);
-          nowTg.textContent = 'Now' + (t.now ? ' ✓' : '');
+          if (t.now) t.nowAt = null; /* Now beats a scheduled hour */
+          refreshTags();
         });
         row.appendChild(nowTg);
+        /* v0.40: one-tap hour chips — arrange the task at 10:00/12:00/...;
+           it flips to Now once the clock passes that hour. Tap again to clear. */
+        ['10', '12', '14', '16', '18', '20'].forEach(function (h) {
+          var hv = h + ':00';
+          var hc = UI.el('<button type="button" class="chip td-hr-chip' + (t.nowAt === hv ? ' on' : '') + '" title="Do at ' + hv + '">' + h + '</button>');
+          hc.addEventListener('click', function () {
+            if (t.nowAt === hv) { t.nowAt = null; }
+            else { t.nowAt = hv; t.now = false; }
+            refreshTags();
+          });
+          row.appendChild(hc);
+        });
         var nowAtIn = UI.el('<input type="time" class="td-nowat" title="Becomes Now at this time" value="' + UI.esc(t.nowAt || '') + '">');
-        nowAtIn.addEventListener('change', function () { t.nowAt = nowAtIn.value || null; });
+        nowAtIn.addEventListener('change', function () {
+          t.nowAt = nowAtIn.value || null;
+          if (t.nowAt) t.now = false;
+          refreshTags();
+        });
         row.appendChild(nowAtIn);
         var lockTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.locked ? ' on' : '') + '">' + (t.locked ? '🔒 Protected' : '🔓 Protect') + '</button>');
         lockTg.addEventListener('click', function () {
