@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.40.0';
+var APP_VERSION = '0.43.0';
 
 var App = (function () {
 
@@ -39,21 +39,29 @@ var App = (function () {
     });
   }
 
+  var _routedHash = null;
   function route() {
     var hash = location.hash || '#/exercise';
     var parts = hash.replace(/^#\//, '').split('/');
     var tab = parts[0] || 'exercise';
     if (!Screens[tab]) { tab = 'exercise'; parts = ['exercise']; }
+    /* v0.41: replay the swipe-in ONLY on a real navigation. Same-page
+       refreshes (alert ticker promotions, sync auto-refresh) re-render the
+       content silently — no scroll jump, no repeating transition effect. */
+    var moved = hash !== _routedHash;
+    _routedHash = hash;
     document.querySelectorAll('.tabbar a').forEach(function (a) {
       a.classList.toggle('active', a.dataset.tab === tab);
     });
     var screen = document.getElementById('screen');
     screen.innerHTML = '';
-    window.scrollTo(0, 0);
-    /* replay the enter animation */
-    screen.style.animation = 'none';
-    void screen.offsetWidth;
-    screen.style.animation = '';
+    if (moved) {
+      window.scrollTo(0, 0);
+      /* replay the enter animation */
+      screen.style.animation = 'none';
+      void screen.offsetWidth;
+      screen.style.animation = '';
+    }
     Screens[tab].render(screen, parts.slice(1));
     if (window.DevText) DevText.sync();
   }
@@ -128,6 +136,13 @@ var App = (function () {
       .then(function () { return DB.seedIfEmpty(); })
       .then(function (seeded) {
         return DB.seedProgramsIfEmpty().then(function () { return seeded; });
+      })
+      .then(function (seeded) {
+        /* v0.42: existing installs pick up newly added seed exercises */
+        return DB.seedTopUp().then(function (n) {
+          if (n) UI.toast('Exercise library: +' + n + ' new exercise' + (n === 1 ? '' : 's'));
+          return seeded;
+        });
       })
       .then(function (seeded) {
         var st0 = DB.getSettings() || {};

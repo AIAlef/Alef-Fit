@@ -95,8 +95,10 @@ Screens.exercise = (function () {
       var pad = UI.el('<div class="pagepad"></div>');
       el.appendChild(pad);
 
-      var mediaWrap = UI.el('<div class="media-wrap"></div>');
-      var media = UI.el('<div class="media-strip"></div>');
+      /* v0.42: pictures fit the screen width, stacked; each image carries a
+         small lower-right button that opens the full-size view (the bundled
+         1080px picture generated from ExercisePix/). */
+      var media = UI.el('<div class="media-full"></div>');
       (r.media || []).forEach(function (m) {
         var node;
         if (m.type === 'image') node = UI.el('<img src="' + m.dataUrl + '" alt="">');
@@ -104,20 +106,16 @@ Screens.exercise = (function () {
           node = document.createElement('video');
           node.src = m.dataUrl; node.controls = true; node.playsInline = true;
         }
-        media.appendChild(UI.cropWrap(node, m.crop));
+        var item = UI.el('<div class="mf-item"></div>');
+        item.appendChild(UI.cropWrap(node, m.crop));
+        if (m.type === 'image') {
+          var zb = UI.el('<button class="mf-zoom" aria-label="View full size" title="View full size">⛶</button>');
+          zb.addEventListener('click', function () { bigView(m); });
+          item.appendChild(zb);
+        }
+        media.appendChild(item);
       });
-      mediaWrap.appendChild(media);
-      if ((r.media || []).length) {
-        /* cycle media display size S → M → L (global setting) */
-        var szBtn = UI.el('<button class="size-cycle" aria-label="media size">⤢</button>');
-        szBtn.addEventListener('click', function () {
-          var order = ['s', 'm', 'l'];
-          var next = order[(order.indexOf(DB.getSettings().mediaSize || 'm') + 1) % 3];
-          DB.saveSettings({ mediaSize: next }).then(App.applySettings);
-        });
-        mediaWrap.appendChild(szBtn);
-      }
-      pad.appendChild(mediaWrap);
+      pad.appendChild(media);
 
       pad.appendChild(UI.el('<div class="section-title">Muscle</div>'));
       pad.appendChild(UI.el('<div class="card"><div>' + UI.esc((r.muscles || []).join(', ') || '—') + '</div>' +
@@ -144,6 +142,29 @@ Screens.exercise = (function () {
       });
       pad.appendChild(delBtn);
     });
+  }
+
+  /* ---- full-size picture viewer (v0.42) ----
+     Dark overlay, image fit to the screen; tap the picture to toggle 2×
+     zoom (then drag/scroll to look around), ✕ or backdrop closes. Always
+     shows the WHOLE picture even when a crop is set on the thumbnail. */
+  function bigView(m) {
+    var ov = UI.el('<div class="imgview" role="dialog" aria-label="Full-size picture"></div>');
+    var img = UI.el('<img src="' + m.dataUrl + '" alt="">');
+    var x = UI.el('<button class="iv-x" aria-label="Close">✕</button>');
+    ov.appendChild(img);
+    ov.appendChild(x);
+    function close() { ov.remove(); }
+    x.addEventListener('click', close);
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    img.addEventListener('click', function () {
+      ov.classList.toggle('zoomed');
+      if (ov.classList.contains('zoomed')) {
+        ov.scrollLeft = Math.max(0, (img.offsetWidth - ov.clientWidth) / 2);
+        ov.scrollTop = Math.max(0, (img.offsetHeight - ov.clientHeight) / 2);
+      }
+    });
+    document.body.appendChild(ov);
   }
 
   /* ---- crop editor: pick the visible area of an image / video ----

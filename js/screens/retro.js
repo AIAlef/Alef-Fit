@@ -81,6 +81,8 @@ Screens.retro = (function () {
       card('#/retro/rv', 'Progressive Rep-Vol Trend', 'Weekly working-set volume per exercise', null, 'retro-rv');
       card(null, 'Weight training', '(day / week)', trio(logs), 'retro-wt');
       card(null, 'Incline walk', '(day / week)', trio(walks), 'retro-iw');
+      /* v0.43: retrospective on finished to-dos — same page as Alef.do ⋮ → Completed */
+      card('#/discipline/todo/completed', 'Completed Tasks', 'Review finished to-dos — 💡 turn each month into lessons', null, null);
     });
   }
 

@@ -5,6 +5,12 @@
    Muscles + technique (last step is a safety caution) reviewed for accuracy. */
 'use strict';
 
+/* Bump SEED_REV by 1 every time exercises are ADDED to this file.
+   Existing installs top up on next launch (db.js seedTopUp): entries whose
+   name is not in the library yet are added — user edits are never touched.
+   Workflow: HowToAddNewExercise.txt in the project root. */
+var SEED_REV = 1;
+
 var SEED_EXERCISES = [
 /* ---- chest ---- */
 { n: "Bench Press", c: "chest", m: ["Pectoralis Major", "Triceps", "Anterior Deltoid"], s: ["Lie flat, grip just wider than shoulders, shoulder blades pinched, feet planted.", "Lower the bar to mid-chest with elbows about 45 degrees.", "Press up to lockout without bouncing off the chest.", "⚠ Caution: Keep wrists stacked over elbows and do not flare the elbows out — protects the shoulders. Use a spotter when heavy."], media: [{ type: "image", src: "exercise-img/Bench Press 01.jpg" }, { type: "image", src: "exercise-img/Bench Press 02.jpg" }] },

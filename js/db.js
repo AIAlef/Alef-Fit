@@ -606,6 +606,38 @@ var DB = (function () {
     });
   }
 
+  /* v0.42: seed top-up — when SEED_REV (seed-data.js) is newer than this
+     install's stored rev, ADD any seed exercise whose name is not in the
+     library yet. Never overwrites or deletes anything the user has; ids are
+     deterministic (name slug) so every device adds the SAME record and the
+     Drive merge cannot duplicate it. Bypasses the PC proposal pipeline —
+     a library top-up is app maintenance, not a user edit. */
+  function seedTopUp() {
+    var target = window.SEED_REV || 1;
+    return get('meta', 'seedRev').then(function (row) {
+      var have = row ? row.value : 1;
+      if (have >= target) return 0;
+      return all('exercises').then(function (rows) {
+        var names = {};
+        rows.forEach(function (r) { names[String(r.name || '').trim().toLowerCase()] = 1; });
+        var now = Date.now();
+        var adds = (window.SEED_EXERCISES || []).filter(function (s) {
+          return !names[String(s.n || '').trim().toLowerCase()];
+        });
+        return Promise.all(adds.map(function (s) {
+          var slug = String(s.n).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+          return putRaw('exercises', {
+            id: 'seed-x-' + slug, name: s.n, categoryId: s.c, muscles: s.m,
+            steps: s.s, media: s.media || [], seeded: true,
+            createdAt: now, updatedAt: now
+          });
+        })).then(function () {
+          return put('meta', { key: 'seedRev', value: target });
+        }).then(function () { return adds.length; });
+      });
+    });
+  }
+
   /* One-time: give every empty program category a starter dummy program
      (user asked for examples to see the design; freely deletable). */
   function seedProgramsIfEmpty() {
@@ -865,7 +897,7 @@ var DB = (function () {
     var incSet = rows.find(function (r) { return r.key === 'settings'; });
     if (incSet && incSet.value) chain = chain.then(function () { return mergeSettings(incSet.value); });
     return chain.then(function () {
-      return mergeMetaKeys(rows, ['programCats', 'todoCats', 'textOverrides']);
+      return mergeMetaKeys(rows, ['programCats', 'todoCats', 'textOverrides', 'todoReflect']);
     });
   }
 
@@ -947,7 +979,7 @@ var DB = (function () {
         r[2].forEach(function (t) { tagName[t.id] = t.name; });
         out.tasks = {
           lists: r[0].map(function (c) { return c.name; }),
-          items: r[1].filter(function (t) { return !t.noShare && t.cat !== 'vault'; }).map(function (t) {
+          items: r[1].filter(function (t) { return !t.noShare && t.cat !== 'vault' && !t.archived; }).map(function (t) {
             return {
               id: t.id,
               title: t.title, list: catName[t.cat] || t.cat || '', now: !!t.now,
@@ -1351,7 +1383,7 @@ var DB = (function () {
     loadSettings: loadSettings, getSettings: getSettings, saveSettings: saveSettings,
     claimRole: claimRole, isSuperseded: isSuperseded,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
-    seedIfEmpty: seedIfEmpty, seedProgramsIfEmpty: seedProgramsIfEmpty,
+    seedIfEmpty: seedIfEmpty, seedProgramsIfEmpty: seedProgramsIfEmpty, seedTopUp: seedTopUp,
     getTodoCats: getTodoCats, saveTodoCats: saveTodoCats, migrateTodosOnce: migrateTodosOnce,
     mediaUrl: mediaUrl, internMedia: internMedia, internExMedia: internExMedia,
     hydrateExMedia: hydrateExMedia, hydrateNote: hydrateNote, internUrlList: internUrlList,

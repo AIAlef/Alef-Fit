@@ -20,6 +20,7 @@ Screens.discipline = (function () {
       if (parts[1] === 'moment') return renderMoment(el);
       if (parts[1] === 'send') return renderSend(el);
       if (parts[1] === 'review') return renderReview(el);
+      if (parts[1] === 'completed') return renderCompleted(el, parts[2]);
       return renderTodo(el);
     }
     if (parts[0] === 'alarm') return renderAlarm(el);
@@ -132,7 +133,12 @@ Screens.discipline = (function () {
         '<button data-a="moment">' + UI.icon('bolt') + '<span>Moment</span></button>' +
         '<button data-a="filter">' + UI.icon('funnel') + '<span>Filter</span></button>' +
         '<button data-a="option">' + UI.icon('sliders') + '<span>Option</span></button>' +
-        '<button data-a="tags">' + UI.icon('tag') + '<span>Tag ' + (s.todoTagsOn ? 'ON' : 'OFF') + '</span></button></div>');
+        '<button data-a="tags">' + UI.icon('tag') + '<span>Tag ' + (s.todoTagsOn ? 'ON' : 'OFF') + '</span></button>' +
+        '<button data-a="completed">' + UI.icon('todo') + '<span>Completed</span></button></div>');
+      m.querySelector('[data-a=completed]').addEventListener('click', function () {
+        m.remove();
+        location.hash = '#/discipline/todo/completed';
+      });
       m.querySelector('[data-a=moment]').addEventListener('click', function () {
         m.remove();
         if (DB.proposalMode()) { UI.toast('Moment runs on the S26 (this PC proposes changes)'); return; }
@@ -169,6 +175,8 @@ Screens.discipline = (function () {
           cats.splice(vAt, 0, { id: 'vault', name: '', color: '#b9a44c' });
         }
         var rows = res[1], tags = res[2], props = res[3];
+        /* v0.41: archived (Completed Tasks) entries live on their own page */
+        rows = rows.filter(function (t) { return !t.archived; });
         _nowColor = '#d9a441';
         res[0].forEach(function (c) { if (c.id === 'now' && c.color) _nowColor = c.color; });
         /* proposal badges: PC → drafts to send; S26 → sent to review */
@@ -383,8 +391,13 @@ Screens.discipline = (function () {
       });
       var delBtn = item.querySelector('.td-del');
       if (delBtn) delBtn.addEventListener('click', function () {
-        UI.confirm('Delete this task?', 'Delete').then(function (ok) {
-          if (ok) DB.del('todos', t.id).then(draw);
+        /* v0.41: ✕ on a finished task ARCHIVES it into Completed Tasks
+           (recoverable there) instead of deleting it outright */
+        t.archived = true;
+        t.archivedAt = Date.now();
+        DB.put('todos', t).then(function () {
+          UI.toast('Moved to Completed Tasks');
+          draw();
         });
       });
       /* press & hold, then DRAG to another list (mouse + touch) */
@@ -544,6 +557,189 @@ Screens.discipline = (function () {
             location.hash === '#/discipline/todo') draw();
       });
     }
+  }
+
+  /* ---- Completed Tasks archive (v0.41, reworked v0.43) ----
+     Finished tasks land here when their ✕ is tapped in Alef.do. Months fold
+     (minimized by default); each month header carries a 💡 review button
+     that opens the fullscreen month-review page (lesson note + editable
+     task list). ↩ recovers; ✕ here deletes forever (confirm). */
+  var TDC_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  var _tdcOpen = {}; /* month fold state — session only, default folded */
+  function tdcMonthGroups(rows) {
+    rows.sort(function (a, b) { return (b.doneAt || b.archivedAt || 0) - (a.doneAt || a.archivedAt || 0); });
+    var groups = [], byKey = {};
+    rows.forEach(function (t) {
+      var d = new Date(t.doneAt || t.archivedAt || Date.now());
+      var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      if (!byKey[key]) {
+        byKey[key] = { key: key, label: TDC_MONTHS[d.getMonth()] + ' ' + d.getFullYear(), items: [] };
+        groups.push(byKey[key]);
+      }
+      byKey[key].items.push(t);
+    });
+    return groups;
+  }
+  function tdcArchived(res) {
+    var hideVault = (DB.getSettings() || {}).deviceId === 'PC';
+    return res.filter(function (t) { return t.archived && !(hideVault && t.cat === 'vault'); });
+  }
+  function renderCompleted(el, ym) {
+    if (ym) return renderReflect(el, ym);
+    el.appendChild(UI.header({ title: 'Completed Tasks', back: '#/discipline/todo' }));
+    var pad = UI.el('<div class="pagepad"></div>');
+    el.appendChild(pad);
+    var wrap = UI.el('<div></div>');
+    pad.appendChild(wrap);
+    function draw() {
+      wrap.innerHTML = '';
+      Promise.all([DB.getTodoCats(), DB.all('todos')]).then(function (res) {
+        var catName = {};
+        res[0].forEach(function (c) { catName[c.id] = c.name; });
+        catName.vault = '🔒 Vault';
+        var rows = tdcArchived(res[1]);
+        if (!rows.length) {
+          wrap.appendChild(UI.emptyState('No completed tasks yet',
+            'When you tap ✕ on a finished task in Alef.do it moves here instead of being deleted.'));
+          return;
+        }
+        tdcMonthGroups(rows).forEach(function (g) {
+          var open = !!_tdcOpen[g.key];
+          var hd = UI.el('<div class="tdc-hd">' +
+            '<button class="tdc-fold tdc-month" aria-expanded="' + open + '">' +
+            '<span class="tdc-arrow">' + (open ? '▾' : '▸') + '</span> ' + g.label +
+            ' <span class="tdc-n">(' + g.items.length + ')</span></button>' +
+            '<button class="tdc-idea" aria-label="Review this month" title="Review — turn these tasks into lessons">💡</button></div>');
+          hd.querySelector('.tdc-fold').addEventListener('click', function () {
+            _tdcOpen[g.key] = !open;
+            draw();
+          });
+          hd.querySelector('.tdc-idea').addEventListener('click', function () {
+            location.hash = '#/discipline/todo/completed/' + g.key;
+          });
+          wrap.appendChild(hd);
+          if (!open) return;
+          g.items.forEach(function (t) {
+            var d = new Date(t.doneAt || t.archivedAt || Date.now());
+            var dd = String(d.getDate()).padStart(2, '0') + '-' +
+                     String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                     String(d.getFullYear()).slice(2);
+            var item = UI.el('<div class="list-item todo-item li-done tdc-row">' +
+              '<input type="checkbox" checked disabled aria-label="completed">' +
+              '<span class="li-main"><span class="li-title">' + UI.esc(t.title) + '</span>' +
+              '<span class="li-sub">' + UI.esc(catName[t.cat] || t.cat || 'TODAY') + ' · ' + dd + '</span></span>' +
+              '<button class="td-recover" aria-label="recover task" title="Recover back to Alef.do">↩</button>' +
+              '<button class="td-del tdc-del" aria-label="delete forever" title="Delete forever">✕</button></div>');
+            item.querySelector('.td-recover').addEventListener('click', function () {
+              t.archived = false;
+              t.archivedAt = null;
+              DB.put('todos', t).then(function () {
+                UI.toast('Recovered to ' + (catName[t.cat] || 'Alef.do'));
+                draw();
+              });
+            });
+            item.querySelector('.tdc-del').addEventListener('click', function () {
+              UI.confirm('Delete "' + t.title + '" forever? It cannot be recovered.', 'Delete').then(function (ok) {
+                if (ok) DB.del('todos', t.id).then(draw);
+              });
+            });
+            wrap.appendChild(item);
+          });
+        });
+      });
+    }
+    draw();
+  }
+
+  /* ---- month review page (v0.43, fullscreen) ----
+     Upper third: plain lesson note (autosaved per month, meta todoReflect —
+     synced + in full backups). Lower two thirds: that month's completed
+     tasks WITHOUT the cross-out, subtasks listed; tap any text to edit it,
+     ✕ deletes the task (confirm) or a subtask. */
+  function renderReflect(el, ym) {
+    var y = +ym.split('-')[0], mo = +ym.split('-')[1] - 1;
+    var label = (TDC_MONTHS[mo] || '?') + ' ' + y;
+    el.appendChild(UI.header({ title: label + ' — Review', back: '#/discipline/todo/completed' }));
+    var page = UI.el('<div class="rf-page"></div>');
+    el.appendChild(page);
+
+    var note = UI.el('<textarea class="rf-note" placeholder="What did these tasks teach you? Note the lessons, ideas, plans or anything useful you gained this month — it saves by itself."></textarea>');
+    page.appendChild(note);
+    var noteObj = {};
+    DB.get('meta', 'todoReflect').then(function (r) {
+      noteObj = (r && r.value) || {};
+      if (noteObj[ym]) note.value = noteObj[ym];
+    });
+    var saveT = null;
+    note.addEventListener('input', function () {
+      clearTimeout(saveT);
+      saveT = setTimeout(function () {
+        noteObj[ym] = note.value;
+        DB.put('meta', { key: 'todoReflect', value: noteObj, updatedAt: Date.now() });
+      }, 500);
+    });
+
+    var listWrap = UI.el('<div class="rf-list"></div>');
+    page.appendChild(listWrap);
+    function editText(span, initial, onCommit) {
+      var inp = UI.el('<input type="text" class="rf-edit" value="' + UI.esc(initial) + '">');
+      span.replaceWith(inp);
+      inp.focus();
+      if (inp.select) inp.select();
+      var done = false;
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { done = true; onCommit(inp.value.trim() || initial); } });
+      inp.addEventListener('blur', function () { if (!done) { done = true; onCommit(inp.value.trim() || initial); } });
+    }
+    function draw() {
+      listWrap.innerHTML = '';
+      DB.all('todos').then(function (res) {
+        var rows = tdcArchived(res).filter(function (t) {
+          var d = new Date(t.doneAt || t.archivedAt || Date.now());
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') === ym;
+        });
+        rows.sort(function (a, b) { return (b.doneAt || b.archivedAt || 0) - (a.doneAt || a.archivedAt || 0); });
+        if (!rows.length) {
+          listWrap.appendChild(UI.emptyState('Nothing here any more', 'The tasks of this month were deleted or recovered.'));
+          return;
+        }
+        rows.forEach(function (t) {
+          var card = UI.el('<div class="rf-task"></div>');
+          var trow = UI.el('<div class="rf-trow"><input type="checkbox" checked disabled aria-label="completed">' +
+            '<span class="rf-title">' + UI.esc(t.title) + '</span>' +
+            '<button class="td-del" aria-label="delete task">✕</button></div>');
+          trow.querySelector('.rf-title').addEventListener('click', function (e) {
+            editText(e.target, t.title, function (v) {
+              t.title = v;
+              DB.put('todos', t).then(draw);
+            });
+          });
+          trow.querySelector('.td-del').addEventListener('click', function () {
+            UI.confirm('Delete "' + t.title + '" forever?', 'Delete').then(function (ok) {
+              if (ok) DB.del('todos', t.id).then(draw);
+            });
+          });
+          card.appendChild(trow);
+          (t.subs || []).forEach(function (sub, i) {
+            var srow = UI.el('<div class="rf-sub"><span class="rf-bullet">•</span>' +
+              '<span class="rf-stext">' + UI.esc(sub.title) + '</span>' +
+              '<button class="td-del td-del-sm" aria-label="delete subtask">✕</button></div>');
+            srow.querySelector('.rf-stext').addEventListener('click', function (e) {
+              editText(e.target, sub.title, function (v) {
+                sub.title = v;
+                DB.put('todos', t).then(draw);
+              });
+            });
+            srow.querySelector('.td-del').addEventListener('click', function () {
+              t.subs.splice(i, 1);
+              DB.put('todos', t).then(draw);
+            });
+            card.appendChild(srow);
+          });
+          listWrap.appendChild(card);
+        });
+      });
+    }
+    draw();
   }
 
   /* ---- task detail sheet (slides up) ---- */
