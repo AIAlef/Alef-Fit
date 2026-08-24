@@ -11,6 +11,7 @@ Screens.discipline = (function () {
     { id: 'note',  name: 'Fitness Note',       icon: 'note',   sub: 'Plans, strategy, motivation' },
     { id: 'bb',    name: 'Bodybuilding',       icon: 'muscle', sub: 'Knowledge, technique, image collection' },
     { id: 'alarm', name: 'Alarm Reminder',     icon: 'bell',   sub: 'Repeating training alarms' },
+    { id: 'motiv', name: 'Fitness Motivation', icon: 'play',   sub: 'Video clips from Drive — rate & sort' },
     { id: 'walk',  name: 'Incline Walk',       icon: 'walk',   sub: '12-3-30 style treadmill sessions' }
   ];
 
@@ -24,6 +25,7 @@ Screens.discipline = (function () {
       return renderTodo(el);
     }
     if (parts[0] === 'alarm') return renderAlarm(el);
+    if (parts[0] === 'motiv') return renderMotiv(el);
     if (parts[0] === 'walk') return renderWalk(el);
     if (parts[0] === 'note') return renderNotes(el, 'note', 'Fitness Note', parts.slice(1));
     if (parts[0] === 'bb') return renderNotes(el, 'bb', 'Bodybuilding', parts.slice(1));
@@ -557,6 +559,203 @@ Screens.discipline = (function () {
             location.hash === '#/discipline/todo') draw();
       });
     }
+  }
+
+  /* ---- Fitness Motivation (v0.44) ----
+     Video clips living in the user's own Google Drive folder. The rating IS
+     the filename prefix ("9.5 - Name.mp4"), so it survives outside the app.
+     ↻ pulls the folder; edits (rename / re-rate / X) stage locally and the
+     Apply bar writes them to the REAL Drive files (X → Drive trash). */
+  var MV_RATES = ['10', '9.5', '9', '8.5', '8', '7.5', '7'];
+  var _mvBlobs = {}; /* session cache: fileId → blob URL */
+  function mvParse(drvName) {
+    var ext = (drvName.match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0];
+    var base = ext ? drvName.slice(0, -ext.length) : drvName;
+    var m = base.match(/^(10|9\.5|9|8\.5|8|7\.5|7)\s*-\s*(.+)$/);
+    return { rating: m ? m[1] : 'na', name: (m ? m[2] : base).trim(), ext: ext };
+  }
+  function mvDriveName(it) {
+    return (MV_RATES.indexOf(it.rating) >= 0 ? it.rating + ' - ' : '') + it.name + it.ext;
+  }
+  function mvDirty(it) { return it.rating !== it.origRating || it.name !== it.origName; }
+  function mvSave(items) {
+    return DB.put('meta', { key: 'motivList', value: { items: items, syncedAt: Date.now() }, updatedAt: Date.now() });
+  }
+  function renderMotiv(el) {
+    var items = [];
+    var hdr = UI.header({
+      title: 'Fitness Motivation', back: '#/discipline',
+      action: { icon: 'sync', label: 'Sync videos', onClick: doSync }
+    });
+    el.appendChild(hdr);
+    var pad = UI.el('<div class="pagepad"></div>');
+    el.appendChild(pad);
+    var wrap = UI.el('<div></div>');
+    pad.appendChild(wrap);
+
+    function hintFor(e) {
+      var s = String(e && e.message || e);
+      if (/403|insufficient|scope|PERMISSION/i.test(s)) return 'Google needs a new permission — Setting → Share with Claude → Connect (one popup), then ↻ again';
+      if (/404/.test(s)) return 'Folder not found — check the Fitness Motivation folder in your Drive';
+      return s.slice(0, 120);
+    }
+    function doSync() {
+      var btn = hdr.querySelector('.topbar-action button');
+      if (btn) btn.classList.add('spin');
+      Sync.motivList().then(function (files) {
+        var old = {};
+        items.forEach(function (it) { old[it.id] = it; });
+        items = files.map(function (f) {
+          var p = mvParse(f.name);
+          var prev = old[f.id];
+          var it = {
+            id: f.id, drvName: f.name, ext: p.ext, mime: f.mimeType,
+            thumbLink: f.thumbnailLink || null,
+            thumb: prev ? prev.thumb : null,
+            origName: p.name, origRating: p.rating,
+            name: p.name, rating: p.rating
+          };
+          if (prev && mvDirty(prev)) { it.name = prev.name; it.rating = prev.rating; } /* keep staged edits */
+          return it;
+        });
+        return mvSave(items).then(function () {
+          draw();
+          /* thumbnails after the list is on screen */
+          return Promise.all(items.map(function (it) {
+            if (it.thumb || !it.thumbLink) return null;
+            return Sync.motivThumb(it.thumbLink).then(function (d) { it.thumb = d; });
+          }));
+        });
+      }).then(function () {
+        return mvSave(items);
+      }).then(function () {
+        if (btn) btn.classList.remove('spin');
+        UI.toast('Videos: ' + items.length);
+        draw();
+      }).catch(function (e) {
+        if (btn) btn.classList.remove('spin');
+        UI.toast(hintFor(e));
+      });
+    }
+    function play(it) {
+      function show(url) {
+        var ov = UI.el('<div class="imgview" role="dialog" aria-label="Video"></div>');
+        var v = document.createElement('video');
+        v.src = url; v.controls = true; v.autoplay = true; v.playsInline = true;
+        ov.appendChild(v);
+        var x = UI.el('<button class="iv-x" aria-label="Close">✕</button>');
+        x.addEventListener('click', function () { try { v.pause(); } catch (e) { /* ok */ } ov.remove(); });
+        ov.addEventListener('click', function (e) { if (e.target === ov) { try { v.pause(); } catch (e2) { /* ok */ } ov.remove(); } });
+        ov.appendChild(x);
+        document.body.appendChild(ov);
+      }
+      if (_mvBlobs[it.id]) return show(_mvBlobs[it.id]);
+      UI.toast('Loading video…');
+      Sync.motivBlob(it.id).then(function (b) {
+        var url = null;
+        try { url = URL.createObjectURL(b); } catch (e) { /* jsdom */ }
+        if (!url) { UI.toast('Could not play this video'); return; }
+        _mvBlobs[it.id] = url;
+        show(url);
+      }).catch(function (e) { UI.toast(hintFor(e)); });
+    }
+    function editSheet(it) {
+      var body = UI.el('<div>' +
+        UI.field('Name', '<input type="text" id="mv-name" value="' + UI.esc(it.name) + '">') +
+        '<div class="field"><span class="field-label">Rating (X = delete on Apply)</span><div class="mv-rates"></div></div></div>');
+      var row = body.querySelector('.mv-rates');
+      var cur = it.rating;
+      MV_RATES.concat(['na', 'X']).forEach(function (r) {
+        var lb = r === 'na' ? 'N/A' : r;
+        var ch = UI.el('<button type="button" class="chip mv-rate' + (r === 'X' ? ' mv-x' : '') + (cur === r ? ' on' : '') + '" data-r="' + r + '">' + lb + '</button>');
+        ch.addEventListener('click', function () {
+          cur = r;
+          row.querySelectorAll('.mv-rate').forEach(function (x) { x.classList.toggle('on', x.dataset.r === r); });
+        });
+        row.appendChild(ch);
+      });
+      UI.modal('Edit video', body, [
+        { label: 'Cancel' },
+        {
+          label: 'Save', primary: true, onClick: function (close) {
+            var v = body.querySelector('#mv-name').value.trim();
+            if (v) it.name = v;
+            it.rating = cur;
+            mvSave(items).then(function () { close(); draw(); });
+          }
+        }
+      ]);
+    }
+    function applyAll() {
+      var changed = items.filter(mvDirty);
+      var toTrash = changed.filter(function (it) { return it.rating === 'X'; });
+      var toRename = changed.filter(function (it) { return it.rating !== 'X'; });
+      UI.confirm('Apply to Google Drive: rename ' + toRename.length + ' file' + (toRename.length === 1 ? '' : 's') +
+        ', move ' + toTrash.length + ' to Drive trash?', 'Apply').then(function (ok) {
+        if (!ok) return;
+        var chain = Promise.resolve();
+        var fails = 0;
+        toRename.forEach(function (it) {
+          chain = chain.then(function () {
+            return Sync.motivPatch(it.id, { name: mvDriveName(it) }).then(function () {
+              it.origName = it.name;
+              it.origRating = it.rating;
+              it.drvName = mvDriveName(it);
+            }).catch(function () { fails++; });
+          });
+        });
+        toTrash.forEach(function (it) {
+          chain = chain.then(function () {
+            return Sync.motivPatch(it.id, { trashed: true }).then(function () {
+              items = items.filter(function (x) { return x.id !== it.id; });
+            }).catch(function () { fails++; });
+          });
+        });
+        chain.then(function () {
+          return mvSave(items);
+        }).then(function () {
+          UI.toast(fails ? fails + ' change(s) failed — ↻ and retry' : 'Drive updated ✓');
+          draw();
+        });
+      });
+    }
+    function draw() {
+      wrap.innerHTML = '';
+      var pending = items.filter(mvDirty).length;
+      if (pending) {
+        var bar = UI.el('<button class="td-propbar">☁ Apply ' + pending + ' change' + (pending === 1 ? '' : 's') + ' to Drive ›</button>');
+        bar.addEventListener('click', applyAll);
+        wrap.appendChild(bar);
+      }
+      if (!items.length) {
+        wrap.appendChild(UI.emptyState('No videos yet', 'Put clips in the "Fitness Motivation" folder of your Google Drive, then tap ↻ above.'));
+        return;
+      }
+      MV_RATES.concat(['na', 'X']).forEach(function (r) {
+        var inR = items.filter(function (it) { return it.rating === r; });
+        if (!inR.length) return;
+        var lb = r === 'na' ? 'N/A — no rating' : (r === 'X' ? 'X — marked for delete' : r);
+        wrap.appendChild(UI.el('<div class="section-title mv-cat' + (r === 'X' ? ' mv-cat-x' : '') + '">' + lb + ' <span class="tdc-n">(' + inR.length + ')</span></div>'));
+        var grid = UI.el('<div class="mv-grid"></div>');
+        inR.forEach(function (it) {
+          var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + '">' +
+            '<button class="mv-thumb" aria-label="play">' +
+            (it.thumb ? '<img src="' + it.thumb + '" alt="">' : '<span class="mv-ph">▶</span>') +
+            '</button>' +
+            '<div class="mv-row"><span class="mv-name">' + UI.esc(it.name) + (mvDirty(it) ? ' <span class="mv-dot">●</span>' : '') + '</span>' +
+            '<button class="btn-icon sm mv-edit" aria-label="edit">' + UI.icon('edit') + '</button></div></div>');
+          card.querySelector('.mv-thumb').addEventListener('click', function () { play(it); });
+          card.querySelector('.mv-edit').addEventListener('click', function () { editSheet(it); });
+          grid.appendChild(card);
+        });
+        wrap.appendChild(grid);
+      });
+    }
+    DB.get('meta', 'motivList').then(function (r) {
+      items = (r && r.value && r.value.items) || [];
+      draw();
+      if (!items.length) doSync(); /* first visit: pull automatically */
+    });
   }
 
   /* ---- Completed Tasks archive (v0.41, reworked v0.43) ----

@@ -10,10 +10,11 @@
 window.Sync = (function () {
   var SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
   var SCOPE_FILE = 'https://www.googleapis.com/auth/drive.file';
+  var SCOPE_DRIVE = 'https://www.googleapis.com/auth/drive'; /* v0.44: Fitness Motivation folder (user's own files) */
   /* the Claude share file is visible → needs drive.file too; only ask when on */
   function scopes() {
     var st = DB.getSettings() || {};
-    return SCOPE + (st.claudeShareOn ? ' ' + SCOPE_FILE : '');
+    return SCOPE + (st.claudeShareOn ? ' ' + SCOPE_FILE : '') + ' ' + SCOPE_DRIVE;
   }
   var API = 'https://www.googleapis.com/drive/v3/';
   var UPLOAD = 'https://www.googleapis.com/upload/drive/v3/';
@@ -550,10 +551,58 @@ window.Sync = (function () {
       .catch(function (e) { _busy = false; throw e; });
   }
 
+  /* ---- v0.44: Fitness Motivation — video clips in the user's own Drive
+     folder. Needs the full drive scope (SCOPE_DRIVE); tokens granted before
+     v0.44 lack it → callers show a "Reconnect Google" hint on 403. ---- */
+  var MOTIV_DEFAULT_FOLDER = '1KfNiyo6D_49zUFxudMXv6hKiqgUVt6jC';
+  function motivFolderId() {
+    var s = DB.getSettings() || {};
+    var v = String(s.motivFolder || MOTIV_DEFAULT_FOLDER);
+    var m = v.match(/folders\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : v;
+  }
+  function motivList() {
+    return getToken().then(function () {
+      return api('files?q=' + encodeURIComponent("'" + motivFolderId() + "' in parents and trashed=false and mimeType contains 'video/'") +
+        '&fields=files(id,name,mimeType,size,thumbnailLink,modifiedTime)&pageSize=200&orderBy=name');
+    }).then(function (r) { return r.files || []; });
+  }
+  function motivPatch(id, body) {
+    return getToken().then(function () {
+      return api('files/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    });
+  }
+  function motivBlob(id) {
+    return getToken().then(function () {
+      return api('files/' + id + '?alt=media', { raw: true });
+    }).then(function (r) { return r.blob(); });
+  }
+  function motivThumb(url) {
+    if (!url) return Promise.resolve(null);
+    return getToken().then(function () {
+      return fetch(url, { headers: { Authorization: 'Bearer ' + _token } });
+    }).then(function (r) { return r && r.ok ? r.blob() : null; }).then(function (b) {
+      if (!b) return null;
+      return new Promise(function (resolve) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = function () { resolve(null); };
+        fr.readAsDataURL(b);
+      });
+    }).catch(function () { return null; });
+  }
+
   return {
     syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
     /* v0.31 instant sync: header button + pull-on-open (Part D) */
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
+    /* v0.44 Fitness Motivation (Drive folder of clips) */
+    motivList: motivList, motivPatch: motivPatch, motivBlob: motivBlob,
+    motivThumb: motivThumb, motivFolderId: motivFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
     hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }

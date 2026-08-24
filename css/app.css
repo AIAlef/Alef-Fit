@@ -299,6 +299,29 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   -webkit-overflow-scrolling: touch;
 }
 .imgview img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+.imgview video { max-width: 100%; max-height: 100%; }
+
+/* v0.44: Fitness Motivation — 2-across video grid, rating groups */
+.mv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0 14px; }
+.mv-card { min-width: 0; }
+.mv-card.mv-dim { opacity: .55; }
+.mv-thumb {
+  display: block; width: 100%; aspect-ratio: 16 / 10; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--surface2); overflow: hidden;
+  padding: 0; cursor: pointer; position: relative;
+}
+.mv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mv-ph { font-size: 1.6rem; color: var(--text2); position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.mv-row { display: flex; align-items: flex-start; gap: 4px; margin-top: 4px; }
+.mv-name { flex: 1; font-size: .8rem; line-height: 1.25; word-break: break-word; }
+.mv-dot { color: var(--accent); font-size: .7rem; }
+.mv-cat { margin-top: 12px; }
+.mv-cat-x { color: var(--danger); }
+.mv-rates { display: flex; flex-wrap: wrap; gap: 6px; }
+.mv-rate { cursor: pointer; }
+.mv-rate.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.mv-rate.mv-x { border-color: var(--danger); color: var(--danger); }
+.mv-rate.mv-x.on { background: var(--danger); color: #fff; }
 .imgview.zoomed { display: block; }
 .imgview.zoomed img { max-width: none; max-height: none; width: 200%; height: auto; cursor: zoom-out; }
 .iv-x {
@@ -432,19 +455,21 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 /* the page fills the viewport so the timer sits flush at the bottom */
 .pagepad.lg-page {
   display: flex; flex-direction: column;
-  height: calc(100dvh - var(--nav-h) - 108px);   /* v0.36: locked to the viewport — timer pinned at the bottom border */
+  /* v0.36: locked to the viewport — timer pinned at the bottom border.
+     v0.44: slack cut 108→56px so the timer sits just above the nav bar
+     (very little gap) and the media area gains the freed space. */
+  height: calc(100dvh - var(--nav-h) - 56px - env(safe-area-inset-top, 0px));
   min-height: 0; overflow: hidden;
   padding-bottom: 0; padding-top: 6px;
 }
 #screen:has(.lg-page) { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px)); }
-/* records: compact, height-capped, scrollbar hidden (drag/touch slides),
-   bottom fades so the media layer shows through where they overlap */
+/* records: compact, height-capped, scrollbar hidden (drag/touch slides).
+   v0.44: media no longer slides under the records — clean boundary
+   (Alef: "the image covers the record portion a little bit"). */
 .lg-recs {
   max-height: 32vh; overflow-y: auto; position: relative; z-index: 2;
-  margin-bottom: -22px; padding-bottom: 22px;
+  margin-bottom: 2px; padding-bottom: 4px;
   scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, #000 76%, rgba(0,0,0,.25) 95%, transparent);
-  mask-image: linear-gradient(to bottom, #000 76%, rgba(0,0,0,.25) 95%, transparent);
 }
 .lg-recs::-webkit-scrollbar { display: none; }
 .lg-recs .rec-title { margin: 0 2px 4px; cursor: pointer; user-select: none; }
@@ -452,7 +477,6 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .lg-recs.recs-min > :not(.rec-title):not(.rec-entry) { display: none; }
 .lg-recs.recs-min {
   max-height: none; margin-bottom: 4px; padding-bottom: 0;
-  -webkit-mask-image: none; mask-image: none;
 }
 /* ~80% boxes + tighter vertical rhythm inside the record area */
 .lg-recs .rec-table td input,
@@ -482,7 +506,7 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 /* v0.35: true full-width media — outranks the base .media-stage .crop-box
    height rule that appears later in this file */
 .lg-media .lg-slide .crop-box { width: 100%; height: auto; max-height: none; margin: 0; }
-.lg-media .lg-slide img, .lg-media .lg-slide video { width: 100%; max-height: 54vh; }
+.lg-media .lg-slide img, .lg-media .lg-slide video { width: 100%; max-height: 62vh; } /* v0.44: bigger picture area */
 .lg-pp {
   position: absolute; right: 10px; bottom: 10px; z-index: 3;
   width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
