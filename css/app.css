@@ -329,6 +329,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   width: 38px; height: 38px; border-radius: 50%; border: 0;
   background: rgba(255,255,255,.18); color: #fff; font-size: 1.05rem; cursor: pointer;
 }
+/* v0.45: capture-current-frame-as-cover button in the video viewer */
+.iv-cam {
+  position: fixed; right: 14px; bottom: calc(64px + env(safe-area-inset-bottom, 0px)); z-index: 301;
+  width: 44px; height: 44px; border-radius: 50%; border: 0;
+  background: rgba(255,255,255,.18); color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.iv-cam svg { width: 22px; height: 22px; }
 .size-cycle { position: absolute; top: 8px; right: 8px; z-index: 2; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(0,0,0,.5); color: #fff; cursor: pointer; font-size: 1rem; }
 html[data-msize="s"] .media-stage img, html[data-msize="s"] .media-stage video { max-height: 170px; }
 html[data-msize="l"] .media-stage img, html[data-msize="l"] .media-stage video { max-height: 440px; }

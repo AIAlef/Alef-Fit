@@ -647,6 +647,29 @@ Screens.discipline = (function () {
         x.addEventListener('click', function () { try { v.pause(); } catch (e) { /* ok */ } ov.remove(); });
         ov.addEventListener('click', function (e) { if (e.target === ov) { try { v.pause(); } catch (e2) { /* ok */ } ov.remove(); } });
         ov.appendChild(x);
+        /* v0.45: grab the CURRENT frame as this video's cover thumbnail.
+           Pause/seek to the moment you like, then tap the camera. The
+           custom cover is kept across ↻ syncs (sync only fetches a Drive
+           thumbnail when none exists yet). */
+        var cam = UI.el('<button class="iv-cam" aria-label="Use this frame as the cover" title="Use this frame as the cover">' + UI.icon('camera') + '</button>');
+        cam.addEventListener('click', function () {
+          try {
+            var w = v.videoWidth || 640, h = v.videoHeight || 360;
+            var scale = Math.min(1, 480 / w);
+            var cv = document.createElement('canvas');
+            cv.width = Math.max(1, Math.round(w * scale));
+            cv.height = Math.max(1, Math.round(h * scale));
+            cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+            it.thumb = cv.toDataURL('image/jpeg', 0.75);
+            mvSave(items).then(function () {
+              UI.toast('Cover updated ✓');
+              draw();
+            });
+          } catch (e) {
+            UI.toast('Could not capture this frame');
+          }
+        });
+        ov.appendChild(cam);
         document.body.appendChild(ov);
       }
       if (_mvBlobs[it.id]) return show(_mvBlobs[it.id]);
