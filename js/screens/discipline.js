@@ -12,6 +12,7 @@ Screens.discipline = (function () {
     { id: 'bb',    name: 'Bodybuilding',       icon: 'muscle', sub: 'Knowledge, technique, image collection' },
     { id: 'alarm', name: 'Alarm Reminder',     icon: 'bell',   sub: 'Repeating training alarms' },
     { id: 'motiv', name: 'Fitness Motivation', icon: 'play',   sub: 'Video clips from Drive — rate & sort' },
+    { id: 'aesth', name: 'Aesthetic Collection', icon: 'camera', sub: 'Physique images from Drive — rate & sort' },
     { id: 'walk',  name: 'Incline Walk',       icon: 'walk',   sub: '12-3-30 style treadmill sessions' }
   ];
 
@@ -26,6 +27,7 @@ Screens.discipline = (function () {
     }
     if (parts[0] === 'alarm') return renderAlarm(el);
     if (parts[0] === 'motiv') return renderMotiv(el);
+    if (parts[0] === 'aesth') return renderAesth(el);
     if (parts[0] === 'walk') return renderWalk(el);
     if (parts[0] === 'note') return renderNotes(el, 'note', 'Fitness Note', parts.slice(1));
     if (parts[0] === 'bb') return renderNotes(el, 'bb', 'Bodybuilding', parts.slice(1));
@@ -568,6 +570,7 @@ Screens.discipline = (function () {
      Apply bar writes them to the REAL Drive files (X → Drive trash). */
   var MV_RATES = ['10', '9.5', '9', '8.5', '8', '7.5', '7'];
   var _mvBlobs = {}; /* session cache: fileId → blob URL */
+  var _mvDl = null;  /* v0.46: download-all progress — survives leaving the page */
   function mvParse(drvName) {
     var ext = (drvName.match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0];
     var base = ext ? drvName.slice(0, -ext.length) : drvName;
@@ -578,20 +581,100 @@ Screens.discipline = (function () {
     return (MV_RATES.indexOf(it.rating) >= 0 ? it.rating + ' - ' : '') + it.name + it.ext;
   }
   function mvDirty(it) { return it.rating !== it.origRating || it.name !== it.origName; }
-  function mvSave(items) {
-    return DB.put('meta', { key: 'motivList', value: { items: items, syncedAt: Date.now() }, updatedAt: Date.now() });
+  function mvSave(items, key) {
+    return DB.put('meta', { key: key || 'motivList', value: { items: items, syncedAt: Date.now() }, updatedAt: Date.now() });
   }
   function renderMotiv(el) {
+    renderCollection(el, {
+      title: 'Fitness Motivation', metaKey: 'motivList', noun: 'video',
+      mime: 'video/', folderId: function () { return Sync.motivFolderId(); }
+    });
+  }
+  /* v0.47: Aesthetic Collection — same machinery, images instead of videos */
+  function renderAesth(el) {
+    renderCollection(el, {
+      title: 'Aesthetic Collection', metaKey: 'aesthList', noun: 'image',
+      mime: 'image/', folderId: function () { return Sync.aesthFolderId(); }
+    });
+  }
+  function renderCollection(el, cfg) {
     var items = [];
+    var stored = {}; /* fileId → 1 when the file is saved on this phone */
+    function save() { return mvSave(items, cfg.metaKey); }
     var hdr = UI.header({
-      title: 'Fitness Motivation', back: '#/discipline',
-      action: { icon: 'sync', label: 'Sync videos', onClick: doSync }
+      title: cfg.title, back: '#/discipline',
+      action: { icon: 'sync', label: 'Sync ' + cfg.noun + 's', onClick: doSync }
     });
     el.appendChild(hdr);
+    /* v0.46: ⬇ download-all (icon only) sits LEFT of the ↻ refresh */
+    var dlBtn = UI.el('<button class="btn-icon" aria-label="Download all ' + cfg.noun + 's to this phone">' + UI.icon('download') + '</button>');
+    dlBtn.addEventListener('click', function () { doDownload(); });
+    var actSpan = hdr.querySelector('.topbar-action');
+    actSpan.insertBefore(dlBtn, actSpan.firstChild);
+    if (_mvDl && _mvDl.active) dlBtn.classList.add('spin');
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
     var wrap = UI.el('<div></div>');
     pad.appendChild(wrap);
+
+    /* v0.46: download every (non-X) video into IndexedDB, one file at a
+       time. Each finished file is committed immediately, so an interrupted
+       run RESUMES: already-stored videos are skipped on the next tap. */
+    function doDownload() {
+      if (_mvDl && _mvDl.active) {
+        UI.toast('Downloading… ' + _mvDl.done + '/' + _mvDl.total + ' — tap again later');
+        return;
+      }
+      DB.allKeys('motivVideos').then(function (keys) {
+        var have = {};
+        keys.forEach(function (k) { have[k] = 1; });
+        var todo = items.filter(function (it) { return it.rating !== 'X' && !have[it.id]; });
+        if (!todo.length) { UI.toast('All ' + cfg.noun + 's are already on this phone ✓'); return; }
+        UI.confirm('Download ' + todo.length + ' ' + cfg.noun + (todo.length === 1 ? '' : 's') +
+          ' from Google Drive to this phone? They then play instantly and work offline. ' +
+          'Big job is fine — every finished video is kept, and tapping ⬇ again RESUMES with the rest.',
+          'Download').then(function (ok) {
+          if (!ok) return;
+          _mvDl = { active: true, done: 0, total: todo.length };
+          dlBtn.classList.add('spin');
+          var fails = 0;
+          var chain = Promise.resolve();
+          function blobBuf(b) { /* arrayBuffer() is missing in older WebViews */
+            if (b.arrayBuffer) return b.arrayBuffer();
+            return new Promise(function (resolve, reject) {
+              var fr = new FileReader();
+              fr.onload = function () { resolve(fr.result); };
+              fr.onerror = reject;
+              fr.readAsArrayBuffer(b);
+            });
+          }
+          todo.forEach(function (it) {
+            chain = chain.then(function () {
+              return Sync.motivBlob(it.id).then(function (b) {
+                return blobBuf(b).then(function (buf) {
+                  return DB.put('motivVideos', {
+                    id: it.id, buf: buf, type: b.type || 'video/mp4',
+                    name: it.name, size: buf.byteLength, savedAt: Date.now()
+                  });
+                });
+              }).then(function () {
+                _mvDl.done++;
+                stored[it.id] = 1;
+                UI.toast('⬇ ' + _mvDl.done + '/' + _mvDl.total);
+              }).catch(function () { fails++; });
+            });
+          });
+          chain.then(function () {
+            _mvDl.active = false;
+            dlBtn.classList.remove('spin');
+            UI.toast(fails
+              ? 'Stored ' + _mvDl.done + '/' + _mvDl.total + ' — tap ⬇ again to resume the rest'
+              : 'All ' + _mvDl.total + ' ' + cfg.noun + 's stored on this phone ✓');
+            draw();
+          });
+        });
+      });
+    }
 
     function hintFor(e) {
       var s = String(e && e.message || e);
@@ -602,7 +685,7 @@ Screens.discipline = (function () {
     function doSync() {
       var btn = hdr.querySelector('.topbar-action button');
       if (btn) btn.classList.add('spin');
-      Sync.motivList().then(function (files) {
+      Sync.motivList(cfg.folderId(), cfg.mime).then(function (files) {
         var old = {};
         items.forEach(function (it) { old[it.id] = it; });
         items = files.map(function (f) {
@@ -618,7 +701,7 @@ Screens.discipline = (function () {
           if (prev && mvDirty(prev)) { it.name = prev.name; it.rating = prev.rating; } /* keep staged edits */
           return it;
         });
-        return mvSave(items).then(function () {
+        return save().then(function () {
           draw();
           /* thumbnails after the list is on screen */
           return Promise.all(items.map(function (it) {
@@ -627,10 +710,10 @@ Screens.discipline = (function () {
           }));
         });
       }).then(function () {
-        return mvSave(items);
+        return save();
       }).then(function () {
         if (btn) btn.classList.remove('spin');
-        UI.toast('Videos: ' + items.length);
+        UI.toast((cfg.noun === 'video' ? 'Videos: ' : 'Images: ') + items.length);
         draw();
       }).catch(function (e) {
         if (btn) btn.classList.remove('spin');
@@ -639,53 +722,77 @@ Screens.discipline = (function () {
     }
     function play(it) {
       function show(url) {
-        var ov = UI.el('<div class="imgview" role="dialog" aria-label="Video"></div>');
-        var v = document.createElement('video');
-        v.src = url; v.controls = true; v.autoplay = true; v.playsInline = true;
+        var ov = UI.el('<div class="imgview" role="dialog" aria-label="Media"></div>');
+        var v;
+        if (cfg.mime === 'image/') {
+          /* v0.47: image viewer — tap the picture for 2× zoom (as ⛶) */
+          v = UI.el('<img src="' + url + '" alt="">');
+          v.addEventListener('click', function () {
+            ov.classList.toggle('zoomed');
+            if (ov.classList.contains('zoomed')) {
+              ov.scrollLeft = Math.max(0, (v.offsetWidth - ov.clientWidth) / 2);
+              ov.scrollTop = Math.max(0, (v.offsetHeight - ov.clientHeight) / 2);
+            }
+          });
+        } else {
+          v = document.createElement('video');
+          v.src = url; v.controls = true; v.autoplay = true; v.playsInline = true;
+        }
         ov.appendChild(v);
         var x = UI.el('<button class="iv-x" aria-label="Close">✕</button>');
-        x.addEventListener('click', function () { try { v.pause(); } catch (e) { /* ok */ } ov.remove(); });
-        ov.addEventListener('click', function (e) { if (e.target === ov) { try { v.pause(); } catch (e2) { /* ok */ } ov.remove(); } });
+        x.addEventListener('click', function () { try { v.pause && v.pause(); } catch (e) { /* ok */ } ov.remove(); });
+        ov.addEventListener('click', function (e) { if (e.target === ov) { try { v.pause && v.pause(); } catch (e2) { /* ok */ } ov.remove(); } });
         ov.appendChild(x);
-        /* v0.45: grab the CURRENT frame as this video's cover thumbnail.
-           Pause/seek to the moment you like, then tap the camera. The
-           custom cover is kept across ↻ syncs (sync only fetches a Drive
-           thumbnail when none exists yet). */
-        var cam = UI.el('<button class="iv-cam" aria-label="Use this frame as the cover" title="Use this frame as the cover">' + UI.icon('camera') + '</button>');
-        cam.addEventListener('click', function () {
-          try {
-            var w = v.videoWidth || 640, h = v.videoHeight || 360;
-            var scale = Math.min(1, 480 / w);
-            var cv = document.createElement('canvas');
-            cv.width = Math.max(1, Math.round(w * scale));
-            cv.height = Math.max(1, Math.round(h * scale));
-            cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
-            it.thumb = cv.toDataURL('image/jpeg', 0.75);
-            mvSave(items).then(function () {
-              UI.toast('Cover updated ✓');
-              draw();
-            });
-          } catch (e) {
-            UI.toast('Could not capture this frame');
-          }
-        });
-        ov.appendChild(cam);
+        if (cfg.mime !== 'image/') {
+          /* v0.45: grab the CURRENT frame as this video's cover thumbnail.
+             Pause/seek to the moment you like, then tap the camera. The
+             custom cover is kept across ↻ syncs (sync only fetches a Drive
+             thumbnail when none exists yet). */
+          var cam = UI.el('<button class="iv-cam" aria-label="Use this frame as the cover" title="Use this frame as the cover">' + UI.icon('camera') + '</button>');
+          cam.addEventListener('click', function () {
+            try {
+              var w = v.videoWidth || 640, h = v.videoHeight || 360;
+              var scale = Math.min(1, 480 / w);
+              var cv = document.createElement('canvas');
+              cv.width = Math.max(1, Math.round(w * scale));
+              cv.height = Math.max(1, Math.round(h * scale));
+              cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+              it.thumb = cv.toDataURL('image/jpeg', 0.75);
+              save().then(function () {
+                UI.toast('Cover updated ✓');
+                draw();
+              });
+            } catch (e) {
+              UI.toast('Could not capture this frame');
+            }
+          });
+          ov.appendChild(cam);
+        }
         document.body.appendChild(ov);
       }
       if (_mvBlobs[it.id]) return show(_mvBlobs[it.id]);
-      UI.toast('Loading video…');
-      Sync.motivBlob(it.id).then(function (b) {
-        var url = null;
-        try { url = URL.createObjectURL(b); } catch (e) { /* jsdom */ }
-        if (!url) { UI.toast('Could not play this video'); return; }
-        _mvBlobs[it.id] = url;
-        show(url);
-      }).catch(function (e) { UI.toast(hintFor(e)); });
+      /* v0.46: stored copy on the phone plays first — instant + offline */
+      DB.get('motivVideos', it.id).then(function (row) {
+        if (row && row.buf) {
+          var lurl = null;
+          try { lurl = URL.createObjectURL(new Blob([row.buf], { type: row.type || 'video/mp4' })); } catch (e) { /* jsdom */ }
+          if (lurl) { _mvBlobs[it.id] = lurl; show(lurl); return; }
+        }
+        UI.toast('Loading ' + cfg.noun + '…');
+        Sync.motivBlob(it.id).then(function (b) {
+          var url = null;
+          try { url = URL.createObjectURL(b); } catch (e) { /* jsdom */ }
+          if (!url) { UI.toast('Could not open this ' + cfg.noun); return; }
+          _mvBlobs[it.id] = url;
+          show(url);
+        }).catch(function (e) { UI.toast(hintFor(e)); });
+      });
     }
     function editSheet(it) {
       var body = UI.el('<div>' +
         UI.field('Name', '<input type="text" id="mv-name" value="' + UI.esc(it.name) + '">') +
-        '<div class="field"><span class="field-label">Rating (X = delete on Apply)</span><div class="mv-rates"></div></div></div>');
+        '<div class="field"><span class="field-label">Rating (X = delete on Apply)</span><div class="mv-rates"></div></div>' +
+        '<div class="field"><span class="field-label">Thumbnail fill</span><div class="mv-fits"></div></div></div>');
       var row = body.querySelector('.mv-rates');
       var cur = it.rating;
       MV_RATES.concat(['na', 'X']).forEach(function (r) {
@@ -697,6 +804,17 @@ Screens.discipline = (function () {
         });
         row.appendChild(ch);
       });
+      /* v0.46: thumbnail fill — fit HEIGHT (default) or fit WIDTH */
+      var frow = body.querySelector('.mv-fits');
+      var curFit = it.fit === 'w' ? 'w' : 'h';
+      [['h', 'Fit height'], ['w', 'Fit width']].forEach(function (f) {
+        var fc = UI.el('<button type="button" class="chip mv-fit' + (curFit === f[0] ? ' on' : '') + '" data-f="' + f[0] + '">' + f[1] + '</button>');
+        fc.addEventListener('click', function () {
+          curFit = f[0];
+          frow.querySelectorAll('.mv-fit').forEach(function (x) { x.classList.toggle('on', x.dataset.f === curFit); });
+        });
+        frow.appendChild(fc);
+      });
       UI.modal('Edit video', body, [
         { label: 'Cancel' },
         {
@@ -704,7 +822,8 @@ Screens.discipline = (function () {
             var v = body.querySelector('#mv-name').value.trim();
             if (v) it.name = v;
             it.rating = cur;
-            mvSave(items).then(function () { close(); draw(); });
+            it.fit = curFit;
+            save().then(function () { close(); draw(); });
           }
         }
       ]);
@@ -731,11 +850,12 @@ Screens.discipline = (function () {
           chain = chain.then(function () {
             return Sync.motivPatch(it.id, { trashed: true }).then(function () {
               items = items.filter(function (x) { return x.id !== it.id; });
+              return DB.del('motivVideos', it.id); /* v0.46: free its phone copy too */
             }).catch(function () { fails++; });
           });
         });
         chain.then(function () {
-          return mvSave(items);
+          return save();
         }).then(function () {
           UI.toast(fails ? fails + ' change(s) failed — ↻ and retry' : 'Drive updated ✓');
           draw();
@@ -743,6 +863,14 @@ Screens.discipline = (function () {
       });
     }
     function draw() {
+      /* refresh the stored-on-phone ✓ badges (ids only — cheap) */
+      DB.allKeys('motivVideos').then(function (keys) {
+        stored = {};
+        keys.forEach(function (k) { stored[k] = 1; });
+        drawBody();
+      }).catch(drawBody);
+    }
+    function drawBody() {
       wrap.innerHTML = '';
       var pending = items.filter(mvDirty).length;
       if (pending) {
@@ -751,7 +879,7 @@ Screens.discipline = (function () {
         wrap.appendChild(bar);
       }
       if (!items.length) {
-        wrap.appendChild(UI.emptyState('No videos yet', 'Put clips in the "Fitness Motivation" folder of your Google Drive, then tap ↻ above.'));
+        wrap.appendChild(UI.emptyState('No ' + cfg.noun + 's yet', 'Put ' + cfg.noun + 's in the "' + cfg.title + '" folder of your Google Drive, then tap ↻ above.'));
         return;
       }
       MV_RATES.concat(['na', 'X']).forEach(function (r) {
@@ -762,8 +890,9 @@ Screens.discipline = (function () {
         var grid = UI.el('<div class="mv-grid"></div>');
         inR.forEach(function (it) {
           var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + '">' +
-            '<button class="mv-thumb" aria-label="play">' +
+            '<button class="mv-thumb fit-' + (it.fit === 'w' ? 'w' : 'h') + '" aria-label="play">' +
             (it.thumb ? '<img src="' + it.thumb + '" alt="">' : '<span class="mv-ph">▶</span>') +
+            (stored[it.id] ? '<span class="mv-loc" title="Stored on this phone">✓</span>' : '') +
             '</button>' +
             '<div class="mv-row"><span class="mv-name">' + UI.esc(it.name) + (mvDirty(it) ? ' <span class="mv-dot">●</span>' : '') + '</span>' +
             '<button class="btn-icon sm mv-edit" aria-label="edit">' + UI.icon('edit') + '</button></div></div>');
@@ -774,7 +903,7 @@ Screens.discipline = (function () {
         wrap.appendChild(grid);
       });
     }
-    DB.get('meta', 'motivList').then(function (r) {
+    DB.get('meta', cfg.metaKey).then(function (r) {
       items = (r && r.value && r.value.items) || [];
       draw();
       if (!items.length) doSync(); /* first visit: pull automatically */

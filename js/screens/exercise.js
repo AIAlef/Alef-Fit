@@ -54,10 +54,10 @@ Screens.exercise = (function () {
       var list = UI.el('<div class="list"></div>');
       rows.sort(function (a, b) { return a.name.localeCompare(b.name); }).forEach(function (r) {
         var thumb = firstImage(r);
+        /* v0.47: name only — muscle detail lives on the detail page */
         var item = UI.el('<button class="list-item">' +
           (thumb ? '<img class="li-thumb" src="' + thumb + '" alt="">' : '<span class="li-thumb">' + UI.icon('muscle') + '</span>') +
-          '<span class="li-main"><span class="li-title">' + UI.esc(r.name) + '</span>' +
-          '<span class="li-sub">' + UI.esc((r.muscles || []).join(', ')) + '</span></span>' +
+          '<span class="li-main"><span class="li-title">' + UI.esc(r.name) + '</span></span>' +
           '<span class="chev">' + UI.icon('chev') + '</span></button>');
         item.addEventListener('click', function () { location.hash = '#/exercise/x/' + r.id; });
         list.appendChild(item);

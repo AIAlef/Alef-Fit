@@ -5,7 +5,7 @@
 
 var DB = (function () {
   var DB_NAME = 'alef-fit';
-  var DB_VERSION = 6;
+  var DB_VERSION = 7;
   var _db = null;
 
   /* Fixed category order = user priority: large → medium (top-down,
@@ -59,6 +59,7 @@ var DB = (function () {
     pcProposals: true,          // PC: governed edits become proposals (device-local)
     landingPage: 'todo',        // page the app opens on: todo|exercise|discipline|program|retro|setting
     motivFolder: '',            // v0.44: Fitness Motivation Drive folder (id or URL; '' = built-in default)
+    aesthFolder: '',            // v0.47: Aesthetic Collection Drive folder (images; '' = built-in default)
     devTextEdit: false,         // Developer: tap-to-edit app texts (device-local)
     gdriveClientId: '',         // Google OAuth client id for Drive sync
     gdriveClientSecret: '',     // its client secret (code-flow exchange)
@@ -148,6 +149,12 @@ var DB = (function () {
         tx.objectStore('exercises').clear();
         tx.objectStore('meta').delete('seeded');
       } catch (e) { /* nothing to clear */ }
+    }
+    if (v === 7) {
+      /* v0.46: offline store for Fitness Motivation videos (ArrayBuffers
+         keyed by Drive file id). Device-local: never synced, never in
+         backups — the Drive folder stays the source of truth. */
+      db.createObjectStore('motivVideos', { keyPath: 'id' });
     }
   }
 
@@ -293,6 +300,7 @@ var DB = (function () {
     });
   }
   function all(store) { return reqP(tx(store).getAll()); }
+  function allKeys(store) { return reqP(tx(store).getAllKeys()); } /* v0.46: ids only — no heavy payloads */
   function byIndex(store, index, value) { return reqP(tx(store).index(index).getAll(value)); }
   function clear(store) { return reqP(tx(store, 'readwrite').clear()); }
 
@@ -1376,7 +1384,7 @@ var DB = (function () {
   }
 
   return {
-    open: open, put: put, putRaw: putRaw, get: get, del: del, all: all, byIndex: byIndex, clear: clear,
+    open: open, put: put, putRaw: putRaw, get: get, del: del, all: all, allKeys: allKeys, byIndex: byIndex, clear: clear,
     uid: uid, todayISO: todayISO,
     CATEGORIES: CATEGORIES,
     getProgramCats: getProgramCats, saveProgramCats: saveProgramCats,

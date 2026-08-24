@@ -555,15 +555,24 @@ window.Sync = (function () {
      folder. Needs the full drive scope (SCOPE_DRIVE); tokens granted before
      v0.44 lack it → callers show a "Reconnect Google" hint on 403. ---- */
   var MOTIV_DEFAULT_FOLDER = '1KfNiyo6D_49zUFxudMXv6hKiqgUVt6jC';
+  var AESTH_DEFAULT_FOLDER = '1mZgP--GYrWuX7OvpoKDK38AbPzV4CZsC'; /* v0.47: Aesthetic Collection (images) */
+  function extractFolderId(v) {
+    var m = String(v).match(/folders\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : String(v);
+  }
   function motivFolderId() {
     var s = DB.getSettings() || {};
-    var v = String(s.motivFolder || MOTIV_DEFAULT_FOLDER);
-    var m = v.match(/folders\/([A-Za-z0-9_-]+)/);
-    return m ? m[1] : v;
+    return extractFolderId(s.motivFolder || MOTIV_DEFAULT_FOLDER);
   }
-  function motivList() {
+  function aesthFolderId() {
+    var s = DB.getSettings() || {};
+    return extractFolderId(s.aesthFolder || AESTH_DEFAULT_FOLDER);
+  }
+  function motivList(folderId, mimePrefix) {
+    var fid = folderId || motivFolderId();
+    var mp = mimePrefix || 'video/';
     return getToken().then(function () {
-      return api('files?q=' + encodeURIComponent("'" + motivFolderId() + "' in parents and trashed=false and mimeType contains 'video/'") +
+      return api('files?q=' + encodeURIComponent("'" + fid + "' in parents and trashed=false and mimeType contains '" + mp + "'") +
         '&fields=files(id,name,mimeType,size,thumbnailLink,modifiedTime)&pageSize=200&orderBy=name');
     }).then(function (r) { return r.files || []; });
   }
@@ -600,9 +609,9 @@ window.Sync = (function () {
     syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
     /* v0.31 instant sync: header button + pull-on-open (Part D) */
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
-    /* v0.44 Fitness Motivation (Drive folder of clips) */
+    /* v0.44 Fitness Motivation + v0.47 Aesthetic Collection (Drive folders) */
     motivList: motivList, motivPatch: motivPatch, motivBlob: motivBlob,
-    motivThumb: motivThumb, motivFolderId: motivFolderId,
+    motivThumb: motivThumb, motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
     hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }
