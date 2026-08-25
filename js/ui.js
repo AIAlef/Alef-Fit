@@ -73,6 +73,7 @@ var UI = (function () {
     muscle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h4l2 5-3 2c1.5 3 5 5 8 5l1 3c-5 2-11 0-14-5S4 6 7 4z"/></svg>',
     camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M4 20h16"/></svg>',
+    export: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 8l5-4 5 4"/><path d="M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg>',
     upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5M4 20h16"/></svg>',
     folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/></svg>',
@@ -194,6 +195,32 @@ var UI = (function () {
       fr.onerror = reject;
       fr.readAsDataURL(file);
     });
+  }
+
+  /* Copy plain text to the clipboard; resolves true on success.
+     Clipboard API first (secure contexts, incl. the APK's https://localhost),
+     hidden-textarea execCommand as the file:// fallback. */
+  function copyText(text) {
+    function fallback() {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        var ok = document.execCommand && document.execCommand('copy');
+        ta.remove();
+        return !!ok;
+      } catch (e) { return false; }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(
+        function () { return true; },
+        function () { return fallback(); });
+    }
+    return Promise.resolve(fallback());
   }
 
   function download(filename, text, mime) {
@@ -448,7 +475,7 @@ var UI = (function () {
     fmtDate: fmtDate, fmtDateTime: fmtDateTime,
     header: header, emptyState: emptyState, fab: fab, toast: toast,
     modal: modal, confirm: confirmDlg, field: field, cropWrap: cropWrap,
-    fileToDataUrl: fileToDataUrl, download: download, saveImage: saveImage,
+    fileToDataUrl: fileToDataUrl, download: download, copyText: copyText, saveImage: saveImage,
     saveDataUrl: saveDataUrl, openDataUrl: openDataUrl, lineChart: lineChart,
     recTable: recTable, pickExercise: pickExercise, lightbox: lightbox, recPastRow: recPastRow,
     dragScroll: dragScroll

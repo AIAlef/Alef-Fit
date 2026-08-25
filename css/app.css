@@ -240,7 +240,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .btn-icon.spin svg { animation: uiSpin 1s linear infinite; }
 @keyframes uiSpin { to { transform: rotate(360deg); } }
 @keyframes sheetUp { from { transform: translateY(40px); opacity: .6; } }
-.modal-title { font-size: var(--fs-lg); font-weight: 700; margin-bottom: var(--sp-3); }
+.modal-title { font-size: var(--fs-lg); font-weight: 700; margin-bottom: var(--sp-3); position: relative; padding-right: 40px; }
+/* v0.48: icon action pinned to a modal title's top-right (text export) */
+.mtitle-btn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+/* v0.48: export picker + single-task preview */
+.exp-all { border-bottom: 1px solid var(--line); margin-bottom: 6px; padding-bottom: 6px; }
+.exp-list { max-height: 45vh; overflow-y: auto; }
+.exp-prev { width: 100%; min-height: 200px; max-height: 45vh; font-family: ui-monospace, Menlo, monospace;
+  font-size: .78rem; white-space: pre; overflow: auto; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--surface2); color: var(--text); padding: 10px; }
 .modal-btns { display: flex; gap: 10px; margin-top: var(--sp-4); }
 .modal-btns .btn { flex: 1; }
 @media (min-width: 600px) { .modal-wrap { align-items: center; } .modal { border-radius: 22px; } }

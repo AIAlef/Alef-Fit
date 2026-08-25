@@ -91,6 +91,197 @@ Screens.discipline = (function () {
   var _tdFilter = []; /* active tag filter (session only) */
   var _nowColor = '#d9a441'; /* NOW list color — borders the flagged tasks */
 
+  /* ---- v0.48: export tasks as readable text (clipboard / .txt) ---- */
+
+  /* one task → markdown-ish block: checkbox line + markers, then subtasks
+     and the note indented underneath */
+  function fmtTaskText(t, tagName) {
+    var extra = [];
+    if (t.prio && t.prio !== 'none') extra.push('[' + prioName(t.prio) + ']');
+    if (t.now || t.cat === 'now') extra.push('[Now]');
+    else if (t.nowAt) extra.push('[@' + t.nowAt + ']');
+    if (t.locked) extra.push('[Protected]');
+    var tags = (t.tags || []).map(function (id) { return (tagName || {})[id]; }).filter(Boolean);
+    if (tags.length) extra.push(tags.map(function (n) { return '#' + n; }).join(' '));
+    var lines = ['- [' + (t.done ? 'x' : ' ') + '] ' + (t.title || '') +
+      (extra.length ? '  ' + extra.join(' ') : '')];
+    (t.subs || []).forEach(function (s) {
+      lines.push('    - [' + (s.done ? 'x' : ' ') + '] ' + (s.title || ''));
+    });
+    if (t.note && String(t.note).trim()) {
+      String(t.note).trim().split('\n').forEach(function (ln, i) {
+        lines.push('    ' + (i === 0 ? 'note: ' : '      ') + ln);
+      });
+    }
+    return lines.join('\n');
+  }
+
+  /* selected categories → one text document; grouping mirrors draw():
+     Now-flagged tasks live under TODAY, done tasks sink to the bottom */
+  function buildTodoExport(cats, rows, tagName, selIds) {
+    var out = ['Alef.do — ' + DB.todayISO(), ''];
+    cats.forEach(function (c) {
+      if (c.id === 'now' || c.id === 'vault' || selIds.indexOf(c.id) < 0) return;
+      var inCat = rows.filter(function (t) {
+        if (t.archived) return false;
+        var home = t.cat || 'today';
+        if (home === 'vault') return false;
+        var flagged = t.now || home === 'now';
+        if (c.id === 'today') return flagged || home === 'today';
+        return !flagged && home === c.id;
+      });
+      if (!inCat.length) return;
+      inCat.sort(function (a, b) {
+        if (a.done !== b.done) return a.done - b.done;
+        var an = (a.now || a.cat === 'now') ? 1 : 0, bn = (b.now || b.cat === 'now') ? 1 : 0;
+        if (an !== bn) return bn - an;
+        var at2 = a.nowAt || '99:99', bt2 = b.nowAt || '99:99';
+        if (at2 !== bt2) return at2 < bt2 ? -1 : 1;
+        return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0);
+      });
+      out.push('## ' + c.name);
+      inCat.forEach(function (t) { out.push(fmtTaskText(t, tagName)); });
+      out.push('');
+    });
+    return out.join('\n').replace(/\n+$/, '') + '\n';
+  }
+
+  function slugName(s) {
+    return String(s || 'task').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '').slice(0, 40) || 'task';
+  }
+
+  function tagNameMap() {
+    return DB.byIndex('tags', 'module', 'todo').then(function (rows) {
+      var m = {};
+      rows.forEach(function (x) { m[x.id] = x.name; });
+      return m;
+    });
+  }
+
+  /* shared picker: check/uncheck items (+ Select all) → Copy / Save .txt */
+  function exportPicker(opts) {
+    var body = UI.el('<div><label class="td-sub-row exp-all"><input type="checkbox" checked>' +
+      '<span class="td-sub-title"><b>Select all</b></span></label>' +
+      '<div class="exp-list"></div></div>');
+    var listEl = body.querySelector('.exp-list');
+    opts.items.forEach(function (it) {
+      listEl.appendChild(UI.el('<label class="td-sub-row"><input type="checkbox" value="' + UI.esc(it.id) + '"' +
+        (it.checked === false ? '' : ' checked') + '><span class="td-sub-title">' + UI.esc(it.label) + '</span></label>'));
+    });
+    var master = body.querySelector('.exp-all input');
+    function itemBoxes() { return listEl.querySelectorAll('input'); }
+    master.addEventListener('change', function () {
+      Array.prototype.forEach.call(itemBoxes(), function (b) { b.checked = master.checked; });
+    });
+    listEl.addEventListener('change', function () {
+      master.checked = Array.prototype.every.call(itemBoxes(), function (b) { return b.checked; });
+    });
+    function picked() {
+      return Array.prototype.filter.call(itemBoxes(), function (b) { return b.checked; })
+        .map(function (b) { return b.value; });
+    }
+    function compose() {
+      var ids = picked();
+      if (!ids.length) { UI.toast('Nothing selected'); return null; }
+      return opts.compose(ids);
+    }
+    UI.modal(opts.title, body, [
+      { label: 'Cancel' },
+      {
+        label: 'Copy', onClick: function (close) {
+          var text = compose();
+          if (text == null) return;
+          UI.copyText(text).then(function (ok) {
+            UI.toast(ok ? 'Copied to clipboard ✓' : 'Copy failed — use Save .txt');
+            if (ok) close();
+          });
+        }
+      },
+      {
+        label: 'Save .txt', primary: true, onClick: function (close) {
+          var text = compose();
+          if (text == null) return;
+          UI.download(opts.filename, text, 'text/plain');
+          if (!(window.Native && Native.isNative && Native.isNative())) UI.toast('Exported ' + opts.filename);
+          close();
+        }
+      }
+    ]);
+  }
+
+  /* header button: pick lists (everything except the Vault) → text */
+  function exportMain() {
+    Promise.all([DB.getTodoCats(), DB.all('todos'), tagNameMap()]).then(function (r) {
+      var cats = r[0], rows = r[1], tagName = r[2];
+      exportPicker({
+        title: 'Export as text',
+        items: cats.filter(function (c) { return c.id !== 'now' && c.id !== 'vault'; })
+          .map(function (c) { return { id: c.id, label: c.name }; }),
+        filename: 'alef-do-' + DB.todayISO() + '.txt',
+        compose: function (ids) { return buildTodoExport(cats, rows, tagName, ids); }
+      });
+    });
+  }
+
+  /* task-sheet button: this one task (current, unsaved edits included) */
+  function exportOneTask(t, cats) {
+    tagNameMap().then(function (tagName) {
+      var cat = null;
+      (cats || []).forEach(function (c) { if (c.id === (t.cat || 'today')) cat = c; });
+      var text = 'Alef.do task — ' + DB.todayISO() + '\n' +
+        (cat ? 'List: ' + cat.name + '\n' : '') + '\n' +
+        fmtTaskText(t, tagName) + '\n';
+      var body = UI.el('<div><textarea class="exp-prev" readonly></textarea></div>');
+      body.querySelector('.exp-prev').value = text;
+      UI.modal('Export task', body, [
+        { label: 'Close' },
+        {
+          label: 'Copy', onClick: function (close) {
+            UI.copyText(text).then(function (ok) {
+              UI.toast(ok ? 'Copied to clipboard ✓' : 'Copy failed — use Save .txt');
+              if (ok) close();
+            });
+          }
+        },
+        {
+          label: 'Save .txt', primary: true, onClick: function (close) {
+            var fn = 'alef-do-task-' + slugName(t.title) + '-' + DB.todayISO() + '.txt';
+            UI.download(fn, text, 'text/plain');
+            if (!(window.Native && Native.isNative && Native.isNative())) UI.toast('Exported ' + fn);
+            close();
+          }
+        }
+      ]);
+    });
+  }
+
+  /* Vault popup entry: pick individual Vault entries → text (stays local,
+     same rule as the Vault JSON backup — user-initiated file/clipboard only) */
+  function exportVaultText() {
+    Promise.all([DB.all('todos'), tagNameMap()]).then(function (r) {
+      var vt = r[0].filter(function (t) { return t.cat === 'vault' && !t.archived; });
+      var tagName = r[1];
+      if (!vt.length) { UI.toast('Vault is empty'); return; }
+      vt.sort(function (a, b) {
+        if (a.done !== b.done) return a.done - b.done;
+        return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0);
+      });
+      exportPicker({
+        title: 'Export Vault as text',
+        items: vt.map(function (t) { return { id: t.id, label: t.title }; }),
+        filename: 'vault-text-' + DB.todayISO() + '.txt',
+        compose: function (ids) {
+          var out = ['The Vault — ' + DB.todayISO(), ''];
+          vt.forEach(function (t) {
+            if (ids.indexOf(t.id) >= 0) out.push(fmtTaskText(t, tagName));
+          });
+          return out.join('\n') + '\n';
+        }
+      });
+    });
+  }
+
   function renderTodo(el) {
     var hdr = UI.header({
       title: 'Alef.do', back: '#/discipline',
@@ -121,6 +312,11 @@ Screens.discipline = (function () {
       var actSpan = hdr.querySelector('.topbar-action');
       actSpan.insertBefore(syncBtn, actSpan.firstChild);
     }
+    /* v0.48: icon-only text export — every list except the Vault */
+    var expBtn = UI.el('<button class="btn-icon" aria-label="Export tasks as text">' + UI.icon('export') + '</button>');
+    expBtn.addEventListener('click', exportMain);
+    var actSpan2 = hdr.querySelector('.topbar-action');
+    actSpan2.insertBefore(expBtn, actSpan2.firstChild);
     el.appendChild(hdr);
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
@@ -309,6 +505,10 @@ Screens.discipline = (function () {
       });
       body.appendChild(impBtn);
       body.appendChild(impFile);
+      /* v0.48: text export — pick entries, copy or save .txt (local only) */
+      var expTxt = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('export') + ' Export Vault as text</button>');
+      expTxt.addEventListener('click', exportVaultText);
+      body.appendChild(expTxt);
       UI.modal('Vault 🔒', body, [{ label: 'Close', primary: true }]);
     }
 
@@ -1268,12 +1468,26 @@ Screens.discipline = (function () {
     var noteIn = UI.el('<textarea class="td-note" placeholder="Add your notes....">' + UI.esc(t.note || '') + '</textarea>');
     body.appendChild(noteIn);
 
+    /* v0.48: export icon in the sheet's top-right — exports THIS task,
+       including edits typed but not yet saved */
+    function addExportBtn(ref) {
+      var mt = ref.root.querySelector('.modal-title');
+      var xb = UI.el('<button type="button" class="btn-icon mtitle-btn" aria-label="Export this task">' + UI.icon('export') + '</button>');
+      xb.addEventListener('click', function () {
+        var t2 = JSON.parse(JSON.stringify(t));
+        t2.title = titleIn.value.trim() || t.title;
+        t2.note = noteIn.value;
+        exportOneTask(t2, cats);
+      });
+      mt.appendChild(xb);
+    }
+
     if (roMode) {
       body.classList.add('td-ro');
       titleIn.disabled = true;
       noteIn.disabled = true;
       Array.prototype.forEach.call(body.querySelectorAll('button, input'), function (el2) { el2.disabled = true; });
-      UI.modal('Task 🔒', body, [
+      addExportBtn(UI.modal('Task 🔒', body, [
         { label: 'Close' },
         {
           label: 'Unlock', primary: true, onClick: function (close) {
@@ -1284,10 +1498,10 @@ Screens.discipline = (function () {
             });
           }
         }
-      ]);
+      ]));
       return;
     }
-    UI.modal('Task', body, [
+    addExportBtn(UI.modal('Task', body, [
       { label: 'Cancel' },
       {
         label: 'Delete', danger: true, onClick: function (close) {
@@ -1308,7 +1522,7 @@ Screens.discipline = (function () {
           DB.put('todos', orig).then(function () { close(); onDone(); });
         }
       }
-    ]);
+    ]));
   }
 
   /* ---- tag picker: select + add + rename + reorder ---- */
@@ -2400,5 +2614,6 @@ Screens.discipline = (function () {
     });
   }
 
-  return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS };
+  return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
+    _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport };
 })();
