@@ -155,10 +155,11 @@ Screens.setting = (function () {
       });
     });
     bk.appendChild(bk3);
-    /* 4 — everything incl. media (Vault excluded by design) */
-    var bk4 = bkBtn('4 · Full backup (all data)', true);
+    /* 4 — everything incl. media. v0.49: the LOCAL full backup now carries
+       the Vault too (cloud sync files still never do). */
+    var bk4 = bkBtn('4 · Full backup (all data + Vault)', true);
     bk4.addEventListener('click', function () {
-      DB.exportAll({ media: 'all' }).then(function (data) {
+      DB.exportAll({ media: 'all', vault: true }).then(function (data) {
         UI.download('alef-fit-4-full-backup-' + DB.todayISO() + '.json', JSON.stringify(data));
       });
     });
@@ -185,26 +186,40 @@ Screens.setting = (function () {
       fr.onload = function () {
         var json;
         try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid backup file'); return; }
-        /* v0.32: one import button — route by the file's own type stamp */
+        /* v0.32: one import button — route by the file's own type stamp.
+           v0.49: every type gets a confirm dialog with a Cancel button
+           BEFORE anything is written. */
+        function confirmImport(what, run) {
+          UI.modal('Import backup', UI.el('<div><p>' + what + '</p></div>'), [
+            { label: 'Cancel' },
+            { label: 'Import', primary: true, onClick: function (close) { close(); run(); } }
+          ]);
+        }
         if (json && json.kind === 'syncinfo-backup') {
-          DB.importSyncInfo(json).then(function (n) {
-            UI.toast('Sync settings restored (' + n + ' values) — tap Full Sync to reconnect');
-            App.route();
-          }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          confirmImport('Google Drive <b>sync settings</b> file. Restore the connection settings on this device?', function () {
+            DB.importSyncInfo(json).then(function (n) {
+              UI.toast('Sync settings restored (' + n + ' values) — tap Full Sync to reconnect');
+              App.route();
+            }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          });
           return;
         }
         if (json && json.kind === 'vault-backup') {
-          DB.importVault(json).then(function (c) {
-            UI.toast('Vault restored: +' + c.added + ' entries, added as new (' + c.stamp + ')');
-            App.route();
-          }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          confirmImport('<b>Vault</b> backup with ' + ((json.vault || []).length) + ' entries. Each is added back as a NEW date-stamped copy — nothing merges or overwrites.', function () {
+            DB.importVault(json).then(function (c) {
+              UI.toast('Vault restored: +' + c.added + ' entries, added as new (' + c.stamp + ')');
+              App.route();
+            }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          });
           return;
         }
         if (json && json.app === 'alef.fit-todo') {
-          DB.importTodoBackup(json).then(function (c) {
-            UI.toast('To-do restored: +' + c.added + ' new, ' + c.updated + ' updated' + (c.vault ? ' (' + c.vault + ' Vault)' : ''));
-            App.route();
-          }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          confirmImport('<b>Alef.do tasks</b> backup from ' + UI.esc((json.exportedAt || '?').slice(0, 10)) + '. Restore these tasks (newer copies win, nothing is wiped)?', function () {
+            DB.importTodoBackup(json).then(function (c) {
+              UI.toast('To-do restored: +' + c.added + ' new, ' + c.updated + ' updated' + (c.vault ? ' (' + c.vault + ' Vault)' : ''));
+              App.route();
+            }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
+          });
           return;
         }
         var when = (json.exportedAt || '?').slice(0, 10);
@@ -673,7 +688,9 @@ Screens.setting = (function () {
     /* grouped by section so each card family is easy to find */
     var groups = [
       ['Exercise — body parts', DB.CATEGORIES.map(function (c) { return { key: 'cat-' + c.id, label: c.name }; })],
-      ['Discipline — modules', [['todo', 'Fitness To-do list'], ['note', 'Fitness Note'], ['bb', 'Bodybuilding'], ['alarm', 'Alarm Reminder'], ['walk', 'Incline Walk']].map(function (m) {
+      /* v0.51: Incline Walk card moved to Program (its old artwork now
+         backs the Cardiovascular exercise category above) */
+      ['Discipline — modules', [['todo', 'Alef.do'], ['note', 'Fitness Note'], ['bb', 'Bodybuilding'], ['alarm', 'Alarm Reminder']].map(function (m) {
         return { key: 'disc-' + m[0], label: m[1] };
       })],
       ['Retro — cards', [

@@ -12,9 +12,8 @@ Screens.discipline = (function () {
     { id: 'bb',    name: 'Bodybuilding',       icon: 'muscle', sub: 'Knowledge, technique, image collection' },
     { id: 'alarm', name: 'Alarm Reminder',     icon: 'bell',   sub: 'Repeating training alarms' },
     { id: 'motiv', name: 'Fitness Motivation', icon: 'play',   sub: 'Video clips from Drive — rate & sort' },
-    { id: 'aesth', name: 'Aesthetic Collection', icon: 'camera', sub: 'Physique images from Drive — rate & sort' },
-    { id: 'walk',  name: 'Incline Walk',       icon: 'walk',   sub: '12-3-30 style treadmill sessions' }
-  ];
+    { id: 'aesth', name: 'Aesthetic Collection', icon: 'camera', sub: 'Physique images from Drive — rate & sort' }
+  ]; /* v0.51: Incline Walk moved to Program → Fitness */
 
   function render(el, parts) {
     if (!parts.length) return renderHome(el);
@@ -28,7 +27,7 @@ Screens.discipline = (function () {
     if (parts[0] === 'alarm') return renderAlarm(el);
     if (parts[0] === 'motiv') return renderMotiv(el);
     if (parts[0] === 'aesth') return renderAesth(el);
-    if (parts[0] === 'walk') return renderWalk(el);
+    if (parts[0] === 'walk') { location.hash = '#/program/walk'; return; } /* moved v0.51 */
     if (parts[0] === 'note') return renderNotes(el, 'note', 'Fitness Note', parts.slice(1));
     if (parts[0] === 'bb') return renderNotes(el, 'bb', 'Bodybuilding', parts.slice(1));
     renderHome(el);
@@ -77,7 +76,7 @@ Screens.discipline = (function () {
     ['vhigh', 'Very high', 'gold'],
     ['high', 'High', 'red'],
     ['medium', 'Medium', 'blue'],
-    ['low', 'Low', 'yellow'],
+    ['low', 'Habit', 'yellow'], /* v0.50: Low became Habit 🌱 (same slot) */
     ['none', 'N/A', 'grey'],
     ['monkey', 'Never', 'purple']
   ];
@@ -91,6 +90,24 @@ Screens.discipline = (function () {
   var _tdFilter = []; /* active tag filter (session only) */
   var _nowColor = '#d9a441'; /* NOW list color — borders the flagged tasks */
 
+  /* v0.50: recognize a DDMMYY token in a task title as its start date —
+     a future date within 366 days, DD 01-31, MM 01-12, YY ≥ 26 (AD only).
+     Returns { date: 'YYYY-MM-DD', title: <token stripped> } or null. */
+  function parseStartToken(title) {
+    var m = /(^|\s)(\d{2})(\d{2})(\d{2})(?=\s|$)/.exec(title || '');
+    if (!m) return null;
+    var dd = +m[2], mm = +m[3], yy = +m[4];
+    if (dd < 1 || dd > 31 || mm < 1 || mm > 12 || yy < 26) return null;
+    var iso = '20' + m[4] + '-' + m[3] + '-' + m[2];
+    var d = new Date(iso + 'T00:00:00');
+    if (isNaN(d.getTime()) || d.getDate() !== dd || (d.getMonth() + 1) !== mm) return null;
+    var diff = (d - new Date(DB.todayISO() + 'T00:00:00')) / 86400000;
+    if (diff < 0 || diff > 366) return null;
+    var at = m.index + m[1].length;
+    var cleaned = (title.slice(0, at) + title.slice(at + 6)).replace(/\s{2,}/g, ' ').trim();
+    return { date: iso, title: cleaned || title.trim() };
+  }
+
   /* ---- v0.48: export tasks as readable text (clipboard / .txt) ---- */
 
   /* one task → markdown-ish block: checkbox line + markers, then subtasks
@@ -99,6 +116,7 @@ Screens.discipline = (function () {
     var extra = [];
     if (t.prio && t.prio !== 'none') extra.push('[' + prioName(t.prio) + ']');
     if (t.now || t.cat === 'now') extra.push('[Now]');
+    else if (t.startDate) extra.push('[@' + t.startDate + ' ' + (t.startTime || '08:00') + ']');
     else if (t.nowAt) extra.push('[@' + t.nowAt + ']');
     if (t.locked) extra.push('[Protected]');
     var tags = (t.tags || []).map(function (id) { return (tagName || {})[id]; }).filter(Boolean);
@@ -476,7 +494,7 @@ Screens.discipline = (function () {
 
     /* Vault menu: what it is + the only backup path (a local file) */
     function vaultMenu() {
-      var body = UI.el('<div><div class="sub" style="margin-bottom:10px">🔒 <b>Vault</b> is a private list that lives on this S26 only (it does not appear on the PC): never synced to Google Drive, never inside sync files or full backups, never shared with Claude, and skipped by Moment. Back it up yourself below — the file lands in Downloads, copy it to a USB drive for safekeeping. Import adds every entry back as a <b>new, date-stamped copy</b> — nothing merges or overwrites, so you review and tidy by hand.</div></div>');
+      var body = UI.el('<div><div class="sub" style="margin-bottom:10px">🔒 <b>Vault</b> is a private list that lives on this S26 only (it does not appear on the PC): never synced to Google Drive, never in transfer/sync files, never shared with Claude, and skipped by Moment. It IS included in the local Full backup (tier 4) since v0.49 — that file stays on your device. Back it up yourself below — the file lands in Downloads, copy it to a USB drive for safekeeping. Import adds every entry back as a <b>new, date-stamped copy</b> — nothing merges or overwrites, so you review and tidy by hand.</div></div>');
       var exp = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export Vault backup</button>');
       exp.addEventListener('click', function () {
         DB.exportVault().then(function (data) {
@@ -557,13 +575,19 @@ Screens.discipline = (function () {
       var when = t.dueDate ? (t.allDay ? UI.fmtDate(t.dueDate) : UI.fmtDateTime(t.dueDate, t.time)) : '';
       /* v0.40: hour badge (arranged time) + priority color dot after the text */
       var marks = '';
-      if (!t.done && t.nowAt && !t.now) {
+      if (!t.done && t.startDate) {
+        /* v0.50: scheduled start — dd/mm chip until the date arrives */
+        marks += ' <span class="td-hrmark" title="Starts ' + UI.esc(t.startDate + ' ' + (t.startTime || '08:00')) + '">' +
+          UI.esc(t.startDate.slice(8, 10) + '/' + t.startDate.slice(5, 7)) + '</span>';
+      } else if (!t.done && t.nowAt && !t.now) {
         var hLbl = /^\d\d:00$/.test(t.nowAt) ? t.nowAt.slice(0, 2) : t.nowAt;
         marks += ' <span class="td-hrmark" title="Do at ' + UI.esc(t.nowAt) + '">' + UI.esc(hLbl) + '</span>';
       }
       if (!t.done && t.prio && t.prio !== 'none') {
         var pd = TD_PRIOS.filter(function (x) { return x[0] === t.prio; })[0];
-        if (pd) marks += ' <span class="td-pdot td-b-' + pd[2] + '" title="' + pd[1] + '"></span>';
+        if (pd) marks += t.prio === 'low'
+          ? ' <span class="td-pmark" title="Habit' + (t.habitCount ? ' ×' + t.habitCount : '') + '">🌱</span>'
+          : ' <span class="td-pdot td-b-' + pd[2] + '" title="' + pd[1] + '"></span>';
       }
       var item = UI.el('<div class="list-item todo-item' + (t.done ? ' li-done' : '') + '" data-id="' + t.id + '">' +
         '<input type="checkbox" ' + (t.done ? 'checked ' : '') + (t.locked ? 'disabled ' : '') + 'aria-label="done">' +
@@ -581,7 +605,14 @@ Screens.discipline = (function () {
         function apply() {
           t.done = checked;
           if (checked) t.doneAt = Date.now();
-          DB.put('todos', t).then(draw);
+          DB.put('todos', t).then(function () {
+            /* v0.50: a finished Habit (🌱) plants tomorrow's copy */
+            if (checked && t.prio === 'low') {
+              return DB.regenHabit(t).then(function (c) {
+                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow 08:00');
+              });
+            }
+          }).then(draw);
         }
         if (checked && (t.subs || []).some(function (x) { return !x.done; })) {
           e.target.checked = false; /* revert until confirmed */
@@ -612,7 +643,20 @@ Screens.discipline = (function () {
         return n && n.closest ? n.closest('.td-zone, .td-cat-title') : null;
       }
       function clearHints() {
-        document.querySelectorAll('.drop-hint').forEach(function (h) { h.classList.remove('drop-hint'); });
+        document.querySelectorAll('.drop-hint, .ins-above, .ins-below').forEach(function (h) {
+          h.classList.remove('drop-hint'); h.classList.remove('ins-above'); h.classList.remove('ins-below');
+        });
+      }
+      /* v0.50: the landing spot is a LINE above/below a row (was a border
+         around the whole row — unclear where the task would land) */
+      function rowHalf(row, y) {
+        var r = row.getBoundingClientRect();
+        return y < r.top + r.height / 2 ? 'above' : 'below';
+      }
+      function nextTaskRow(row) {
+        var n = row.nextElementSibling;
+        while (n && !(n.classList && n.classList.contains('todo-item') && n.dataset.id)) n = n.nextElementSibling;
+        return n;
       }
       item.addEventListener('touchmove', function (e) {
         if (dragging) e.preventDefault(); /* stop page scroll while dragging */
@@ -651,7 +695,7 @@ Screens.discipline = (function () {
           var overEl = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
           var overRow = overEl && overEl.closest ? overEl.closest('.todo-item') : null;
           if (overRow === item) overRow = null;
-          if (overRow) overRow.classList.add('drop-hint');
+          if (overRow) overRow.classList.add(rowHalf(overRow, ev.clientY) === 'above' ? 'ins-above' : 'ins-below');
           else {
             var z = zoneAt(ev.clientX, ev.clientY);
             if (z) z.classList.add('drop-hint');
@@ -672,7 +716,16 @@ Screens.discipline = (function () {
           setTimeout(function () { delete item.dataset.held; }, 80);
           var cat = z && z.dataset.cat;
           if (!cat) return;
-          dropTask(t, cat, dropRow ? dropRow.dataset.id : null);
+          /* v0.50: land ABOVE or BELOW the hovered row, matching the line */
+          var beforeId = null;
+          if (dropRow) {
+            if (rowHalf(dropRow, ev.clientY) === 'above') beforeId = dropRow.dataset.id;
+            else {
+              var nx = nextTaskRow(dropRow);
+              beforeId = nx ? nx.dataset.id : null;
+            }
+          }
+          dropTask(t, cat, beforeId);
         }
         function cleanup() {
           window.removeEventListener('pointermove', onMove);
@@ -735,8 +788,13 @@ Screens.discipline = (function () {
       function save() {
         var v = p.querySelector('.qa-input').value.trim();
         if (!v) return;
+        /* v0.50: a DDMMYY token in the title schedules the start date */
+        var tok = parseStartToken(v);
+        if (tok) UI.toast('Starts ' + tok.date + ' 08:00');
         DB.put('todos', {
-          id: DB.uid(), title: v, cat: selCat, now: nowOn, prio: 'none', tags: [], subs: [], note: '',
+          id: DB.uid(), title: tok ? tok.title : v, cat: selCat, now: tok ? false : nowOn,
+          prio: 'none', tags: [], subs: [], note: '',
+          startDate: tok ? tok.date : null, startTime: tok ? '08:00' : null,
           done: false, dueDate: null, time: null, allDay: false, createdAt: Date.now()
         }).then(function () {
           p.querySelector('.qa-input').value = '';
@@ -770,7 +828,8 @@ Screens.discipline = (function () {
      Apply bar writes them to the REAL Drive files (X → Drive trash). */
   var MV_RATES = ['10', '9.5', '9', '8.5', '8', '7.5', '7'];
   var _mvBlobs = {}; /* session cache: fileId → blob URL */
-  var _mvDl = null;  /* v0.46: download-all progress — survives leaving the page */
+  var _mvDl = {};    /* v0.46: download-all progress — survives leaving the page
+                        (v0.49: one job per collection, keyed by cfg.metaKey) */
   function mvParse(drvName) {
     var ext = (drvName.match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0];
     var base = ext ? drvName.slice(0, -ext.length) : drvName;
@@ -780,9 +839,83 @@ Screens.discipline = (function () {
   function mvDriveName(it) {
     return (MV_RATES.indexOf(it.rating) >= 0 ? it.rating + ' - ' : '') + it.name + it.ext;
   }
-  function mvDirty(it) { return it.rating !== it.origRating || it.name !== it.origName; }
+  function mvDirty(it) { return it.isNew === true || it.rating !== it.origRating || it.name !== it.origName; }
   function mvSave(items, key) {
     return DB.put('meta', { key: key || 'motivList', value: { items: items, syncedAt: Date.now() }, updatedAt: Date.now() });
+  }
+
+  /* v0.49: small grid thumbnail from a gallery-picked image's bytes */
+  function thumbFromBuf(buf, mime) {
+    return new Promise(function (resolve) {
+      var url = null;
+      try { url = URL.createObjectURL(new Blob([buf], { type: mime || 'image/jpeg' })); } catch (e) { return resolve(null); }
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var scale = Math.min(1, 480 / Math.max(img.width || 1, img.height || 1));
+          var cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round((img.width || 1) * scale));
+          cv.height = Math.max(1, Math.round((img.height || 1) * scale));
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+          resolve(cv.toDataURL('image/jpeg', 0.75));
+        } catch (e) { resolve(null); }
+        try { URL.revokeObjectURL(url); } catch (e2) { /* ok */ }
+      };
+      img.onerror = function () { try { URL.revokeObjectURL(url); } catch (e2) { /* ok */ } resolve(null); };
+      img.src = url;
+    });
+  }
+
+  /* v0.49: image-viewer zoom — mouse wheel, two-finger pinch, tap toggles
+     1×/2×. Zoomed image pans with native overlay scrolling. */
+  function ivZoom(ov, v) {
+    var z = 1, baseW = 0, pinch = null, lastPinchAt = 0;
+    function apply(nz, cx, cy) {
+      if (!baseW) baseW = v.clientWidth || v.naturalWidth || 1;
+      nz = Math.max(1, Math.min(6, nz));
+      if (nz === z) return;
+      var ox = ov.scrollLeft, oy = ov.scrollTop;
+      var fac = nz / z;
+      z = nz;
+      if (z === 1) {
+        ov.classList.remove('zoomed');
+        v.style.width = ''; v.style.height = '';
+        v.style.maxWidth = ''; v.style.maxHeight = '';
+      } else {
+        ov.classList.add('zoomed');
+        v.style.maxWidth = 'none'; v.style.maxHeight = 'none'; v.style.height = 'auto';
+        v.style.width = Math.round(baseW * z) + 'px';
+        var cx2 = cx == null ? ov.clientWidth / 2 : cx;
+        var cy2 = cy == null ? ov.clientHeight / 2 : cy;
+        ov.scrollLeft = (ox + cx2) * fac - cx2;
+        ov.scrollTop = (oy + cy2) * fac - cy2;
+      }
+    }
+    ov.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      apply(z * (e.deltaY < 0 ? 1.2 : 1 / 1.2), e.clientX, e.clientY);
+    }, { passive: false });
+    function dist(t) {
+      var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy) || 1;
+    }
+    ov.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 2) pinch = { d: dist(e.touches), z: z };
+    }, { passive: true });
+    ov.addEventListener('touchmove', function (e) {
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault();
+        lastPinchAt = Date.now();
+        apply(pinch.z * dist(e.touches) / pinch.d,
+          (e.touches[0].clientX + e.touches[1].clientX) / 2,
+          (e.touches[0].clientY + e.touches[1].clientY) / 2);
+      }
+    }, { passive: false });
+    ov.addEventListener('touchend', function () { pinch = null; });
+    v.addEventListener('click', function () {
+      if (Date.now() - lastPinchAt < 350) return; /* pinch settling, not a tap */
+      apply(z > 1 ? 1 : 2);
+    });
   }
   function renderMotiv(el) {
     renderCollection(el, {
@@ -806,37 +939,99 @@ Screens.discipline = (function () {
       action: { icon: 'sync', label: 'Sync ' + cfg.noun + 's', onClick: doSync }
     });
     el.appendChild(hdr);
-    /* v0.46: ⬇ download-all (icon only) sits LEFT of the ↻ refresh */
-    var dlBtn = UI.el('<button class="btn-icon" aria-label="Download all ' + cfg.noun + 's to this phone">' + UI.icon('download') + '</button>');
+    /* v0.46: ⬇ download-all (icon only) sits LEFT of the ↻ refresh.
+       v0.49: while a job runs it turns into an animated arrow + % text,
+       and the job keeps running when you leave the page. */
+    var dlBtn = UI.el('<button class="btn-icon dl-btn" aria-label="Download all ' + cfg.noun + 's to this phone">' + UI.icon('download') + '</button>');
     dlBtn.addEventListener('click', function () { doDownload(); });
     var actSpan = hdr.querySelector('.topbar-action');
     actSpan.insertBefore(dlBtn, actSpan.firstChild);
-    if (_mvDl && _mvDl.active) dlBtn.classList.add('spin');
+    function paintDl() {
+      if (!dlBtn.isConnected) return;
+      var job = _mvDl[cfg.metaKey];
+      if (job && job.active) {
+        dlBtn.classList.add('dl-run');
+        dlBtn.innerHTML = UI.icon('download') +
+          '<span class="dl-pct">' + Math.round((job.done / Math.max(1, job.total)) * 100) + '%</span>';
+      } else {
+        dlBtn.classList.remove('dl-run');
+        dlBtn.innerHTML = UI.icon('download');
+      }
+    }
+    if (_mvDl[cfg.metaKey]) _mvDl[cfg.metaKey].onTick = paintDl;
+    paintDl();
+    /* v0.49: ＋ add from the phone gallery — stages NEW items (●) that the
+       ☁ Apply bar uploads into the collection's Drive folder */
+    var addBtn = UI.el('<button class="btn-icon" aria-label="Add ' + cfg.noun + 's from the phone gallery">' + UI.icon('plus') + '</button>');
+    var addFile = UI.el('<input type="file" accept="' + (cfg.mime === 'image/' ? 'image/*' : 'video/*') + '" multiple class="hidden">');
+    addBtn.addEventListener('click', function () { addFile.click(); });
+    addFile.addEventListener('change', function (e) {
+      var files = Array.prototype.slice.call(e.target.files || []);
+      e.target.value = '';
+      if (!files.length) return;
+      var chain = Promise.resolve();
+      files.forEach(function (f) { chain = chain.then(function () { return stageLocal(f); }); });
+      chain.then(function () { return save(); }).then(function () {
+        draw();
+        UI.toast(files.length + ' ' + cfg.noun + (files.length === 1 ? '' : 's') + ' added — ☁ Apply uploads them to Drive');
+      }).catch(function () { UI.toast('Could not read some files'); });
+    });
+    actSpan.insertBefore(addBtn, actSpan.firstChild);
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
+    pad.appendChild(addFile);
     var wrap = UI.el('<div></div>');
     pad.appendChild(wrap);
+
+    function stageLocal(f) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = reject;
+        fr.readAsArrayBuffer(f);
+      }).then(function (buf) {
+        var id = 'new-' + DB.uid();
+        var extM = (f.name || '').match(/\.[A-Za-z0-9]{2,5}$/);
+        var p = mvParse(f.name || ('New ' + cfg.noun));
+        var it = {
+          id: id, drvName: f.name || '',
+          ext: extM ? extM[0] : (cfg.mime === 'image/' ? '.jpg' : '.mp4'),
+          mime: f.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
+          thumbLink: null, thumb: null,
+          origName: p.name, origRating: p.rating,
+          name: p.name, rating: p.rating, isNew: true
+        };
+        return DB.put('motivVideos', { id: id, buf: buf, type: it.mime, name: it.name, size: buf.byteLength, savedAt: Date.now() })
+          .then(function () {
+            if (cfg.mime !== 'image/') return null;
+            return thumbFromBuf(buf, it.mime).then(function (d) { it.thumb = d; });
+          })
+          .then(function () { items.push(it); });
+      });
+    }
 
     /* v0.46: download every (non-X) video into IndexedDB, one file at a
        time. Each finished file is committed immediately, so an interrupted
        run RESUMES: already-stored videos are skipped on the next tap. */
     function doDownload() {
-      if (_mvDl && _mvDl.active) {
-        UI.toast('Downloading… ' + _mvDl.done + '/' + _mvDl.total + ' — tap again later');
+      var run = _mvDl[cfg.metaKey];
+      if (run && run.active) {
+        UI.toast('Downloading in the background… ' + run.done + '/' + run.total);
         return;
       }
       DB.allKeys('motivVideos').then(function (keys) {
         var have = {};
         keys.forEach(function (k) { have[k] = 1; });
-        var todo = items.filter(function (it) { return it.rating !== 'X' && !have[it.id]; });
+        var todo = items.filter(function (it) { return it.rating !== 'X' && !it.isNew && !have[it.id]; });
         if (!todo.length) { UI.toast('All ' + cfg.noun + 's are already on this phone ✓'); return; }
         UI.confirm('Download ' + todo.length + ' ' + cfg.noun + (todo.length === 1 ? '' : 's') +
-          ' from Google Drive to this phone? They then play instantly and work offline. ' +
-          'Big job is fine — every finished video is kept, and tapping ⬇ again RESUMES with the rest.',
+          ' from Google Drive to this phone? They then open instantly and work offline. ' +
+          'The job runs in the background (the ⬇ button shows %); every finished file is kept, and tapping ⬇ again RESUMES with the rest.',
           'Download').then(function (ok) {
           if (!ok) return;
-          _mvDl = { active: true, done: 0, total: todo.length };
-          dlBtn.classList.add('spin');
+          var job = { active: true, done: 0, total: todo.length, onTick: paintDl };
+          _mvDl[cfg.metaKey] = job;
+          paintDl();
           var fails = 0;
           var chain = Promise.resolve();
           function blobBuf(b) { /* arrayBuffer() is missing in older WebViews */
@@ -853,24 +1048,25 @@ Screens.discipline = (function () {
               return Sync.motivBlob(it.id).then(function (b) {
                 return blobBuf(b).then(function (buf) {
                   return DB.put('motivVideos', {
-                    id: it.id, buf: buf, type: b.type || 'video/mp4',
+                    id: it.id, buf: buf, type: b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
                     name: it.name, size: buf.byteLength, savedAt: Date.now()
                   });
                 });
               }).then(function () {
-                _mvDl.done++;
+                job.done++;
                 stored[it.id] = 1;
-                UI.toast('⬇ ' + _mvDl.done + '/' + _mvDl.total);
-              }).catch(function () { fails++; });
+              }).catch(function () { fails++; }).then(function () {
+                if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
+              });
             });
           });
           chain.then(function () {
-            _mvDl.active = false;
-            dlBtn.classList.remove('spin');
+            job.active = false;
+            if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
             UI.toast(fails
-              ? 'Stored ' + _mvDl.done + '/' + _mvDl.total + ' — tap ⬇ again to resume the rest'
-              : 'All ' + _mvDl.total + ' ' + cfg.noun + 's stored on this phone ✓');
-            draw();
+              ? 'Stored ' + job.done + '/' + job.total + ' — tap ⬇ again to resume the rest'
+              : 'All ' + job.total + ' ' + cfg.noun + 's stored on this phone ✓');
+            if (wrap.isConnected) draw();
           });
         });
       });
@@ -925,15 +1121,9 @@ Screens.discipline = (function () {
         var ov = UI.el('<div class="imgview" role="dialog" aria-label="Media"></div>');
         var v;
         if (cfg.mime === 'image/') {
-          /* v0.47: image viewer — tap the picture for 2× zoom (as ⛶) */
+          /* v0.49: full zoom — mouse wheel / pinch gesture / tap 1×↔2× */
           v = UI.el('<img src="' + url + '" alt="">');
-          v.addEventListener('click', function () {
-            ov.classList.toggle('zoomed');
-            if (ov.classList.contains('zoomed')) {
-              ov.scrollLeft = Math.max(0, (v.offsetWidth - ov.clientWidth) / 2);
-              ov.scrollTop = Math.max(0, (v.offsetHeight - ov.clientHeight) / 2);
-            }
-          });
+          ivZoom(ov, v);
         } else {
           v = document.createElement('video');
           v.src = url; v.controls = true; v.autoplay = true; v.playsInline = true;
@@ -1015,7 +1205,7 @@ Screens.discipline = (function () {
         });
         frow.appendChild(fc);
       });
-      UI.modal('Edit video', body, [
+      UI.modal('Edit ' + cfg.noun, body, [
         { label: 'Cancel' },
         {
           label: 'Save', primary: true, onClick: function (close) {
@@ -1030,13 +1220,49 @@ Screens.discipline = (function () {
     }
     function applyAll() {
       var changed = items.filter(mvDirty);
-      var toTrash = changed.filter(function (it) { return it.rating === 'X'; });
-      var toRename = changed.filter(function (it) { return it.rating !== 'X'; });
-      UI.confirm('Apply to Google Drive: rename ' + toRename.length + ' file' + (toRename.length === 1 ? '' : 's') +
-        ', move ' + toTrash.length + ' to Drive trash?', 'Apply').then(function (ok) {
+      /* v0.49: gallery-added items upload to the Drive folder on Apply;
+         a new item already re-rated X is simply discarded (never uploaded) */
+      var toUpload = changed.filter(function (it) { return it.isNew && it.rating !== 'X'; });
+      var toDrop = changed.filter(function (it) { return it.isNew && it.rating === 'X'; });
+      var toTrash = changed.filter(function (it) { return !it.isNew && it.rating === 'X'; });
+      var toRename = changed.filter(function (it) { return !it.isNew && it.rating !== 'X'; });
+      UI.confirm('Apply to Google Drive: ' +
+        (toUpload.length ? 'upload ' + toUpload.length + ' new, ' : '') +
+        'rename ' + toRename.length + ' file' + (toRename.length === 1 ? '' : 's') +
+        ', move ' + toTrash.length + ' to Drive trash' +
+        (toDrop.length ? ', discard ' + toDrop.length + ' never-uploaded' : '') + '?', 'Apply').then(function (ok) {
         if (!ok) return;
         var chain = Promise.resolve();
         var fails = 0;
+        toUpload.forEach(function (it) {
+          chain = chain.then(function () {
+            return DB.get('motivVideos', it.id).then(function (row) {
+              if (!row || !row.buf) throw new Error('local copy missing');
+              return Sync.motivUpload(mvDriveName(it), it.mime || row.type, row.buf, cfg.folderId())
+                .then(function (res) {
+                  var oldId = it.id;
+                  return DB.put('motivVideos', {
+                    id: res.id, buf: row.buf, type: row.type,
+                    name: it.name, size: row.size, savedAt: row.savedAt || Date.now()
+                  }).then(function () { return DB.del('motivVideos', oldId); })
+                    .then(function () {
+                      it.id = res.id;
+                      it.isNew = false;
+                      it.origName = it.name;
+                      it.origRating = it.rating;
+                      it.drvName = mvDriveName(it);
+                      if (res.thumbnailLink) it.thumbLink = res.thumbnailLink;
+                    });
+                });
+            }).catch(function () { fails++; });
+          });
+        });
+        toDrop.forEach(function (it) {
+          chain = chain.then(function () {
+            items = items.filter(function (x) { return x.id !== it.id; });
+            return DB.del('motivVideos', it.id);
+          });
+        });
         toRename.forEach(function (it) {
           chain = chain.then(function () {
             return Sync.motivPatch(it.id, { name: mvDriveName(it) }).then(function () {
@@ -1079,7 +1305,7 @@ Screens.discipline = (function () {
         wrap.appendChild(bar);
       }
       if (!items.length) {
-        wrap.appendChild(UI.emptyState('No ' + cfg.noun + 's yet', 'Put ' + cfg.noun + 's in the "' + cfg.title + '" folder of your Google Drive, then tap ↻ above.'));
+        wrap.appendChild(UI.emptyState('No ' + cfg.noun + 's yet', 'Put ' + cfg.noun + 's in the "' + cfg.title + '" folder of your Google Drive and tap ↻ above — or tap ＋ to add from this phone.'));
         return;
       }
       MV_RATES.concat(['na', 'X']).forEach(function (r) {
@@ -1106,7 +1332,13 @@ Screens.discipline = (function () {
     DB.get('meta', cfg.metaKey).then(function (r) {
       items = (r && r.value && r.value.items) || [];
       draw();
-      if (!items.length) doSync(); /* first visit: pull automatically */
+      if (!items.length) {
+        /* v0.50: first visit auto-pulls ONLY when silent auth exists —
+           merely opening a page must never pop the Google sign-in */
+        DB.get('meta', 'gdriveRefreshToken').then(function (tok) {
+          if (tok && tok.value) doSync();
+        });
+      }
     });
   }
 
@@ -1302,24 +1534,46 @@ Screens.discipline = (function () {
     var tagName = {};
 
     var body = UI.el('<div class="td-sheet"></div>');
-    var titleIn = UI.el('<input type="text" class="td-title-in" value="' + UI.esc(t.title) + '" placeholder="Task name">');
+    /* v0.50: dirty tracking — the Save buttons stay inactive until a change */
+    var dirty = false, saveBtns = [];
+    function dirt() {
+      if (dirty) return;
+      dirty = true;
+      saveBtns.forEach(function (b) { b.disabled = false; });
+    }
+    /* v0.50: auto-growing textarea — word wrap, grows per row, capped at a
+       share of the screen; past the cap it scrolls by gesture (no buttons) */
+    function autosize(ta, capVh) {
+      var cap = Math.round((window.innerHeight || 800) * (capVh || 0.4));
+      ta.style.height = 'auto';
+      var h = Math.min((ta.scrollHeight || 0) + 2, cap);
+      if (h > 8) ta.style.height = h + 'px';
+    }
+    var titleIn = UI.el('<textarea class="td-title-in" rows="1" placeholder="Task name"></textarea>');
+    titleIn.value = t.title || '';
+    titleIn.addEventListener('input', function () { dirt(); autosize(titleIn, 0.3); });
+    titleIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); titleIn.blur(); } });
+    setTimeout(function () { autosize(titleIn, 0.3); }, 0);
     body.appendChild(titleIn);
 
     /* priority: label + level text, badge row below */
     var prioRow = UI.el('<div class="td-prio-row"><span class="td-prio-lbl">Priority</span></div>');
     var badges = UI.el('<div class="td-badges">' + TD_PRIOS.map(function (p) {
-      return '<button type="button" class="td-badge td-b-' + p[2] + ((t.prio || 'none') === p[0] ? ' on' : '') + '" data-p="' + p[0] + '" title="' + p[1] + '"></button>';
+      return '<button type="button" class="td-badge td-b-' + p[2] + ((t.prio || 'none') === p[0] ? ' on' : '') + '" data-p="' + p[0] + '" title="' + p[1] + '">' +
+        (p[0] === 'low' ? '🌱' : '') + '</button>'; /* v0.50: Habit sprout */
     }).join('') + '</div>');
     var prioVal = UI.el('<b id="td-prio-name"></b>');
     function setPrioLabel() {
       var cur = TD_PRIOS.filter(function (x) { return x[0] === (t.prio || 'none'); })[0] || TD_PRIOS[5];
-      prioVal.textContent = cur[1];
+      /* v0.50: Habit shows its repetition count (🌱 grows toward 25 / 100) */
+      prioVal.textContent = cur[1] + (cur[0] === 'low' && t.habitCount ? ' ×' + t.habitCount : '');
       prioVal.className = 'td-prio-val td-pv-' + cur[2];
     }
     setPrioLabel();
     badges.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('.td-badge') : null;
       if (!b) return;
+      dirt();
       t.prio = b.dataset.p;
       badges.querySelectorAll('.td-badge').forEach(function (x) { x.classList.remove('on'); });
       b.classList.add('on');
@@ -1349,7 +1603,8 @@ Screens.discipline = (function () {
         var nowTg = UI.el('<button type="button" class="chip td-now-chip' + (t.now ? ' on' : '') + '">Now' + (t.now ? ' ✓' : '') + '</button>');
         nowTg.addEventListener('click', function () {
           t.now = !t.now;
-          if (t.now) t.nowAt = null; /* Now beats a scheduled hour */
+          if (t.now) { t.nowAt = null; t.startDate = null; t.startTime = null; } /* Now beats any schedule */
+          dirt();
           refreshTags();
         });
         row.appendChild(nowTg);
@@ -1357,24 +1612,49 @@ Screens.discipline = (function () {
            it flips to Now once the clock passes that hour. Tap again to clear. */
         ['10', '12', '14', '16', '18', '20'].forEach(function (h) {
           var hv = h + ':00';
-          var hc = UI.el('<button type="button" class="chip td-hr-chip' + (t.nowAt === hv ? ' on' : '') + '" title="Do at ' + hv + '">' + h + '</button>');
+          var hc = UI.el('<button type="button" class="chip td-hr-chip' + (!t.startDate && t.nowAt === hv ? ' on' : '') + '" title="Do at ' + hv + '">' + h + '</button>');
           hc.addEventListener('click', function () {
-            if (t.nowAt === hv) { t.nowAt = null; }
-            else { t.nowAt = hv; t.now = false; }
+            if (t.nowAt === hv && !t.startDate) { t.nowAt = null; }
+            else { t.nowAt = hv; t.now = false; t.startDate = null; t.startTime = null; }
+            dirt();
             refreshTags();
           });
           row.appendChild(hc);
         });
-        var nowAtIn = UI.el('<input type="time" class="td-nowat" title="Becomes Now at this time" value="' + UI.esc(t.nowAt || '') + '">');
-        nowAtIn.addEventListener('change', function () {
-          t.nowAt = nowAtIn.value || null;
-          if (t.nowAt) t.now = false;
+        /* v0.50: schedule = DATE + time (default 08:00). Date reached → the
+           task moves to TODAY; date+time reached → it becomes NOW. With no
+           date set, the time box is the old same-day "becomes Now at". */
+        var dateIn = UI.el('<input type="date" class="td-startd" title="Start date" value="' + UI.esc(t.startDate || '') + '">');
+        var nowAtIn = UI.el('<input type="time" class="td-nowat" title="' + (t.startDate ? 'Start time' : 'Becomes Now at this time') + '" value="' + UI.esc(t.startDate ? (t.startTime || '08:00') : (t.nowAt || '')) + '">');
+        dateIn.addEventListener('change', function () {
+          if (dateIn.value) {
+            t.startDate = dateIn.value;
+            t.startTime = nowAtIn.value || '08:00';
+            t.now = false;
+            t.nowAt = null;
+          } else {
+            t.startDate = null;
+            t.startTime = null;
+          }
+          dirt();
           refreshTags();
         });
+        nowAtIn.addEventListener('change', function () {
+          if (t.startDate) {
+            t.startTime = nowAtIn.value || '08:00';
+          } else {
+            t.nowAt = nowAtIn.value || null;
+            if (t.nowAt) t.now = false;
+          }
+          dirt();
+          refreshTags();
+        });
+        row.appendChild(dateIn);
         row.appendChild(nowAtIn);
         var lockTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.locked ? ' on' : '') + '">' + (t.locked ? '🔒 Protected' : '🔓 Protect') + '</button>');
         lockTg.addEventListener('click', function () {
           t.locked = !t.locked;
+          dirt();
           lockTg.classList.toggle('on', t.locked);
           lockTg.textContent = t.locked ? '🔒 Protected' : '🔓 Protect';
         });
@@ -1384,6 +1664,7 @@ Screens.discipline = (function () {
           var aiTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.noShare ? '' : ' on') + '">' + (t.noShare ? '🤖 Hidden' : '🤖 Shared') + '</button>');
           aiTg.addEventListener('click', function () {
             t.noShare = !t.noShare;
+            dirt();
             aiTg.classList.toggle('on', !t.noShare);
             aiTg.textContent = t.noShare ? '🤖 Hidden' : '🤖 Shared';
           });
@@ -1392,7 +1673,7 @@ Screens.discipline = (function () {
         var add = UI.el('<button type="button" class="chip td-addtag">+ Add tags</button>');
         add.addEventListener('click', function () {
           tagPicker(t.tags, function (sel) {
-            if (sel) { t.tags = sel; }
+            if (sel) { t.tags = sel; dirt(); }
             refreshTags();
           });
         });
@@ -1418,10 +1699,12 @@ Screens.discipline = (function () {
           (sub.done ? '<button class="td-del td-del-sm" aria-label="remove subtask">✕</button>' : '') + '</div>');
         row.querySelector('input').addEventListener('change', function (e) {
           sub.done = e.target.checked;
+          dirt();
           drawSubs();
         });
         row.querySelector('.td-sub-title').addEventListener('click', function () {
           if (roMode) return;
+          if (row.dataset.held) { delete row.dataset.held; return; } /* drag, not a tap */
           var inp = UI.el('<input type="text" class="td-sub-add" value="' + UI.esc(sub.title) + '">');
           row.replaceChild(inp, row.querySelector('.td-sub-title'));
           inp.focus();
@@ -1431,7 +1714,7 @@ Screens.discipline = (function () {
             if (committed) return;
             committed = true;
             var v = inp.value.trim();
-            if (v) sub.title = v;
+            if (v && v !== sub.title) { sub.title = v; dirt(); }
             drawSubs();
           }
           inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') commitEdit(); });
@@ -1440,8 +1723,77 @@ Screens.discipline = (function () {
         var subDel = row.querySelector('.td-del');
         if (subDel) subDel.addEventListener('click', function () {
           t.subs.splice(i, 1);
+          dirt();
           drawSubs();
         });
+        /* v0.50: press-hold then drag to sort — an insertion line shows
+           where the subtask will land */
+        (function enableSubDrag() {
+          var hold = null, drag = false, sy0 = 0;
+          function clearSubHints() {
+            listEl.querySelectorAll('.ins-above, .ins-below').forEach(function (r2) {
+              r2.classList.remove('ins-above'); r2.classList.remove('ins-below');
+            });
+          }
+          row.addEventListener('touchmove', function (e) { if (drag) e.preventDefault(); }, { passive: false });
+          row.addEventListener('pointerdown', function (e) {
+            if (roMode) return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+            sy0 = e.clientY;
+            drag = false;
+            hold = setTimeout(function () { hold = null; drag = true; row.classList.add('drag-src'); }, 300);
+            function overRowAt(ev) {
+              var n = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+              var o = n && n.closest ? n.closest('.td-sub-row') : null;
+              if (!o || o === row || o.classList.contains('td-sub-addrow') || o.parentNode !== listEl) return null;
+              return o;
+            }
+            function mv(ev) {
+              if (!drag) {
+                if (hold && Math.abs(ev.clientY - sy0) > 8) { clearTimeout(hold); hold = null; end(); }
+                return;
+              }
+              if (ev.preventDefault) ev.preventDefault();
+              clearSubHints();
+              var o = overRowAt(ev);
+              if (o) {
+                var r = o.getBoundingClientRect();
+                o.classList.add(ev.clientY < r.top + r.height / 2 ? 'ins-above' : 'ins-below');
+              }
+            }
+            function up(ev) {
+              if (hold) { clearTimeout(hold); hold = null; }
+              end();
+              if (!drag) return;
+              drag = false;
+              row.classList.remove('drag-src');
+              row.dataset.held = '1';
+              setTimeout(function () { delete row.dataset.held; }, 80);
+              var o = overRowAt(ev);
+              clearSubHints();
+              if (!o) return;
+              var kids = Array.prototype.slice.call(listEl.querySelectorAll('.td-sub-row')).filter(function (k) {
+                return !k.classList.contains('td-sub-addrow');
+              });
+              var to = kids.indexOf(o);
+              var r = o.getBoundingClientRect();
+              var insertAt = to + (ev.clientY >= r.top + r.height / 2 ? 1 : 0);
+              if (i < insertAt) insertAt--;
+              var moved = t.subs.splice(i, 1)[0];
+              t.subs.splice(insertAt, 0, moved);
+              dirt();
+              drawSubs();
+            }
+            function end() {
+              window.removeEventListener('pointermove', mv);
+              window.removeEventListener('pointerup', up);
+              window.removeEventListener('pointercancel', up);
+            }
+            window.addEventListener('pointermove', mv);
+            window.addEventListener('pointerup', up);
+            window.addEventListener('pointercancel', up);
+          });
+        })();
         listEl.appendChild(row);
       });
       var addRow = UI.el('<div class="td-sub-row td-sub-addrow"><input type="checkbox" disabled>' +
@@ -1452,6 +1804,7 @@ Screens.discipline = (function () {
         if (!v) return;
         ai.value = ''; /* a trailing blur must not add it twice */
         t.subs.push({ id: DB.uid(), title: v, done: false });
+        dirt();
         drawSubs();
         var next = subsWrap.querySelector('.td-sub-add');
         if (next) next.focus();
@@ -1463,9 +1816,28 @@ Screens.discipline = (function () {
     drawSubs();
     body.appendChild(subsWrap);
 
-    /* note */
+    /* note — v0.50: word wrap + auto-grow per row (gesture scroll past the
+       cap); a long note STARTS minimized to 3 rows, tap to expand */
     body.appendChild(UI.el('<div class="td-subs-head">NOTE</div>'));
-    var noteIn = UI.el('<textarea class="td-note" placeholder="Add your notes....">' + UI.esc(t.note || '') + '</textarea>');
+    var noteIn = UI.el('<textarea class="td-note" placeholder="Add your notes...."></textarea>');
+    noteIn.value = t.note || '';
+    noteIn.addEventListener('input', function () {
+      dirt();
+      if (!noteIn.classList.contains('td-note-min')) autosize(noteIn, 0.45);
+    });
+    if ((t.note || '').split('\n').length > 3 || (t.note || '').length > 220) {
+      noteIn.classList.add('td-note-min');
+      noteIn.rows = 3;
+      var expandNote = function () {
+        if (!noteIn.classList.contains('td-note-min')) return;
+        noteIn.classList.remove('td-note-min');
+        autosize(noteIn, 0.45);
+      };
+      noteIn.addEventListener('focus', expandNote);
+      noteIn.addEventListener('click', expandNote);
+    } else {
+      setTimeout(function () { autosize(noteIn, 0.45); }, 0);
+    }
     body.appendChild(noteIn);
 
     /* v0.48: export icon in the sheet's top-right — exports THIS task,
@@ -1482,12 +1854,32 @@ Screens.discipline = (function () {
       mt.appendChild(xb);
     }
 
+    /* v0.50: one save routine for the bottom button AND the header icon;
+       a DDMMYY token typed in the title schedules the start date */
+    function doSave(close) {
+      var name = (titleIn.value || '').trim();
+      if (!name) { UI.toast('Task name is required'); return; }
+      var tok = parseStartToken(name);
+      if (tok) {
+        name = tok.title;
+        t.startDate = tok.date;
+        t.startTime = t.startTime || '08:00';
+        t.now = false;
+        t.nowAt = null;
+        UI.toast('Starts ' + tok.date + ' ' + t.startTime);
+      }
+      t.title = name;
+      t.note = noteIn.value;
+      Object.assign(orig, t);
+      DB.put('todos', orig).then(function () { close(); onDone(); });
+    }
+
     if (roMode) {
       body.classList.add('td-ro');
       titleIn.disabled = true;
       noteIn.disabled = true;
       Array.prototype.forEach.call(body.querySelectorAll('button, input'), function (el2) { el2.disabled = true; });
-      addExportBtn(UI.modal('Task 🔒', body, [
+      var refRo = UI.modal('Task 🔒', body, [
         { label: 'Close' },
         {
           label: 'Unlock', primary: true, onClick: function (close) {
@@ -1498,10 +1890,12 @@ Screens.discipline = (function () {
             });
           }
         }
-      ]));
+      ]);
+      refRo.root.querySelector('.modal').classList.add('modal-full');
+      addExportBtn(refRo);
       return;
     }
-    addExportBtn(UI.modal('Task', body, [
+    var ref = UI.modal('Task', body, [
       { label: 'Cancel' },
       {
         label: 'Delete', danger: true, onClick: function (close) {
@@ -1512,17 +1906,39 @@ Screens.discipline = (function () {
           });
         }
       },
-      {
-        label: 'Save', primary: true, onClick: function (close) {
-          var name = titleIn.value.trim();
-          if (!name) { UI.toast('Task name is required'); return; }
-          t.title = name;
-          t.note = noteIn.value;
-          Object.assign(orig, t);
-          DB.put('todos', orig).then(function () { close(); onDone(); });
-        }
-      }
-    ]));
+      { label: 'Save', primary: true, onClick: doSave }
+    ]);
+    /* v0.50: the sheet fills the screen */
+    ref.root.querySelector('.modal').classList.add('modal-full');
+    /* footer → icons: ✕ ¼ · 🗑 ¼ · 💾 ½ right; Save starts inactive.
+       (The real label stays inside, visually hidden — a11y + tests.) */
+    var fb = ref.root.querySelectorAll('.modal-btns .btn');
+    fb[0].innerHTML = UI.icon('x') + '<span class="vh">Cancel</span>';
+    fb[0].classList.add('tds-sm');
+    fb[0].setAttribute('aria-label', 'Cancel');
+    fb[1].innerHTML = UI.icon('trash') + '<span class="vh">Delete</span>';
+    fb[1].classList.add('tds-sm');
+    fb[1].setAttribute('aria-label', 'Delete');
+    fb[2].innerHTML = UI.icon('save') + '<span class="vh">Save</span>';
+    fb[2].classList.add('tds-save');
+    fb[2].setAttribute('aria-label', 'Save');
+    fb[2].disabled = true;
+    saveBtns.push(fb[2]);
+    /* header save icon (top-right, left of export) — same save routine */
+    var hs = UI.el('<button type="button" class="btn-icon mtitle-btn mtitle-btn2" aria-label="Save task" disabled>' + UI.icon('save') + '</button>');
+    hs.addEventListener('click', function () { doSave(ref.close); });
+    ref.root.querySelector('.modal-title').appendChild(hs);
+    saveBtns.push(hs);
+    addExportBtn(ref);
+    /* tapping outside with unsaved changes → save / discard, never silent loss */
+    ref.root.addEventListener('click', function (e) {
+      if (e.target !== ref.root || !dirty) return;
+      e.stopPropagation();
+      UI.modal('Unsaved changes', UI.el('<p>Save your changes to this task?</p>'), [
+        { label: 'Discard', onClick: function (close2) { close2(); ref.close(); } },
+        { label: 'Save', primary: true, onClick: function (close2) { close2(); doSave(ref.close); } }
+      ]);
+    }, true);
   }
 
   /* ---- tag picker: select + add + rename + reorder ---- */
@@ -1928,7 +2344,14 @@ Screens.discipline = (function () {
         doneB.addEventListener('click', function () {
           t.done = true;
           t.doneAt = Date.now();
-          DB.put('todos', t).then(function () { i++; show(); });
+          DB.put('todos', t).then(function () {
+            /* v0.50: a finished Habit (🌱) plants tomorrow's copy */
+            if (t.prio === 'low') {
+              return DB.regenHabit(t).then(function (c) {
+                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow 08:00');
+              });
+            }
+          }).then(function () { i++; show(); });
         });
         s3.appendChild(doneB);
         var delB = UI.el('<button class="btn btn-danger" data-c="__del">Delete</button>');
@@ -2533,86 +2956,6 @@ Screens.discipline = (function () {
   /* ================= Incline Walk recorder =================
      12-3-30 style: incline 12–15 %, speed 3–5.5, time 30–50 min.
      New entries prefill with the last session's numbers. */
-
-  function renderWalk(el) {
-    el.appendChild(UI.header({ title: 'Incline Walk', back: '#/discipline' }));
-    var pad = UI.el('<div class="pagepad"></div>');
-    el.appendChild(pad);
-    var wrap = UI.el('<div></div>');
-    pad.appendChild(wrap);
-
-    function draw() {
-      wrap.innerHTML = '';
-      DB.all('walks').then(function (rows) {
-        if (!rows.length) {
-          wrap.appendChild(UI.emptyState('No incline walks yet', 'Tap + to record a 12-3-30 style session'));
-          return;
-        }
-        rows.sort(function (a, b) { return b.date.localeCompare(a.date); });
-        var recent = rows.slice(0, 60);
-        var list = UI.el('<div class="list"></div>');
-        recent.forEach(function (w) {
-          var it = UI.el('<div class="list-item">' +
-            '<span class="li-thumb">' + UI.icon('walk') + '</span>' +
-            '<span class="li-main"><span class="li-title">' + w.incline + '% · ' + w.speed + ' · ' + w.minutes + ' min</span>' +
-            '<span class="li-sub">' + UI.fmtDate(w.date) + '</span></span>' +
-            '<button class="btn-icon" aria-label="delete">' + UI.icon('trash') + '</button></div>');
-          it.querySelector('.btn-icon').addEventListener('click', function (e) {
-            e.stopPropagation();
-            UI.confirm('Delete this walk?', 'Delete').then(function (ok) { if (ok) DB.del('walks', w.id).then(draw); });
-          });
-          it.querySelector('.li-main').addEventListener('click', function () { walkForm(w, draw); });
-          list.appendChild(it);
-        });
-        wrap.appendChild(list);
-      });
-    }
-
-    el.appendChild(UI.fab('Record walk', function () { walkForm(null, draw); }));
-    draw();
-  }
-
-  function walkForm(existing, onSaved) {
-    DB.all('walks').then(function (rows) {
-      rows.sort(function (a, b) { return a.date.localeCompare(b.date); });
-      var last = rows[rows.length - 1];
-      var w = existing || {
-        id: DB.uid(),
-        date: DB.todayISO(),
-        incline: last ? last.incline : 12,
-        speed: last ? last.speed : 3,
-        minutes: last ? last.minutes : 30
-      };
-      var today = DB.todayISO();
-      var body = UI.el('<div>' +
-        UI.field('Date (past or today only)', '<input type="date" id="wf-date" value="' + w.date + '" max="' + today + '">') +
-        '<div class="row2">' +
-        UI.field('Incline %', '<input type="number" id="wf-inc" step="0.5" min="0" max="30" inputmode="decimal" value="' + w.incline + '">') +
-        UI.field('Speed', '<input type="number" id="wf-spd" step="0.1" min="1" max="10" inputmode="decimal" value="' + w.speed + '">') +
-        '</div>' +
-        UI.field('Time (minutes)', '<input type="number" id="wf-min" step="5" min="5" max="180" inputmode="numeric" value="' + w.minutes + '">') +
-        '</div>');
-      body.querySelectorAll('input[type=number]').forEach(function (inp) {
-        inp.addEventListener('focus', function () { this.select(); });
-      });
-      UI.modal(existing ? 'Edit walk' : 'Record incline walk', body, [
-        { label: 'Cancel' },
-        {
-          label: 'Save', primary: true, onClick: function (close) {
-            var date = body.querySelector('#wf-date').value;
-            if (!date) { UI.toast('Pick a date'); return; }
-            if (date > today) { UI.toast('Future dates are not allowed'); return; }
-            w.date = date;
-            w.incline = parseFloat(body.querySelector('#wf-inc').value) || 0;
-            w.speed = parseFloat(body.querySelector('#wf-spd').value) || 0;
-            w.minutes = parseInt(body.querySelector('#wf-min').value, 10) || 0;
-            if (!w.incline || !w.speed || !w.minutes) { UI.toast('Fill incline, speed and time'); return; }
-            DB.put('walks', w).then(function () { UI.toast('Saved'); close(); onSaved && onSaved(); });
-          }
-        }
-      ]);
-    });
-  }
 
   return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
     _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport };

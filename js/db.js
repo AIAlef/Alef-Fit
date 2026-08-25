@@ -21,7 +21,8 @@ var DB = (function () {
     { id: 'abs',        name: 'Abs',        color: '#e0884a' },
     { id: 'compound',   name: 'Compound',   color: '#b05d8e' },
     { id: 'functional', name: 'Functional', color: '#6d8ca0' },
-    { id: 'stretching', name: 'Stretching', color: '#7fa05d' }
+    { id: 'stretching', name: 'Stretching', color: '#7fa05d' },
+    { id: 'cardio',     name: 'Cardiovascular', color: '#c95d7a' } /* v0.51: special record pattern (incline-walk style) */
   ];
 
   var DEFAULT_PROGRAM_CATS = ['Maintenance', 'Bulking', 'Cutting', 'Endurance', 'Custom'];
@@ -680,14 +681,19 @@ var DB = (function () {
   function exportAll(opts) {
     opts = opts || {};
     var mediaMode = opts.media || 'all';
+    /* v0.49: opts.vault=true → the LOCAL full backup carries the Vault.
+       Every cloud path (Drive sync file, Claude share, undo snapshots,
+       transfer files) keeps calling exportAll WITHOUT the flag. */
+    var withVault = opts.vault === true;
     var out = {
       app: 'alef.fit', schemaVersion: DB_VERSION, appVersion: window.APP_VERSION || '0',
       exportedAt: new Date().toISOString(), mediaMode: mediaMode, stores: {}
     };
+    if (withVault) out.vaultIncluded = true;
     var chain = Promise.resolve();
     DATA_STORES.concat(['meta', 'tombstones']).forEach(function (s) {
       chain = chain.then(function () { return all(s); }).then(function (rows) {
-        if (s === 'todos') rows = rows.filter(function (r) { return r.cat !== 'vault'; }); /* Vault never leaves the device */
+        if (s === 'todos' && !withVault) rows = rows.filter(function (r) { return r.cat !== 'vault'; }); /* Vault stays local unless the LOCAL full backup asks */
         if (s === 'meta') rows = rows.filter(function (r) { return r.key !== 'gdriveRefreshToken' && r.key !== 'undoSnapshot'; });
         if (s === 'proposals') rows = rows.filter(function (r) { return r.status !== 'draft'; });
         out.stores[s] = rows;
@@ -747,6 +753,11 @@ var DB = (function () {
     if (!json || json.app !== 'alef.fit' || !json.stores) return Promise.reject(new Error('Not an Alef.Fit backup file'));
     if (json.schemaVersion > DB_VERSION) return Promise.reject(new Error('Backup is from a newer app version — update the app first'));
     json = migrateBackup(json);
+    /* v0.49: a LOCAL full backup may carry the Vault, but Vault entries may
+       only land on the S26 — a PC import drops them (S26-only by design). */
+    if (((_settings || {}).deviceId || '') === 'PC' && json.stores.todos) {
+      json.stores.todos = json.stores.todos.filter(function (r) { return r.cat !== 'vault'; });
+    }
     var pre = opts.noSnapshot ? Promise.resolve() : exportAll({ media: 'none' }).then(function (snap) {
       return putRaw('meta', { key: 'undoSnapshot', value: { at: Date.now(), mode: mode, data: snap } });
     });
@@ -774,7 +785,9 @@ var DB = (function () {
     var keepScale = _settings ? _settings.textScale : null;
     var keepSize = _settings ? _settings.mediaSize : 'm';
     var vaultKeep = [];
-    /* Vault entries never ride backups — carry them across the wipe */
+    /* Carry the local Vault across the wipe. A v0.49+ full backup may add
+       its own vault rows too — on an id collision the LOCAL copy wins
+       (vaultKeep is written last), everything else lands additively. */
     var chain = all('todos').then(function (rows) {
       vaultKeep = rows.filter(function (r) { return r.cat === 'vault'; });
     });
@@ -1093,16 +1106,82 @@ var DB = (function () {
     if (proposalMode()) return Promise.resolve(0);
     var d = new Date();
     var hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    var today = todayISO();
     return all('todos').then(function (rows) {
-      var due = rows.filter(function (t) {
-        return !t.done && !t.now && t.nowAt && t.nowAt <= hm && t.cat !== 'vault';
+      var changed = [];
+      rows.forEach(function (t) {
+        if (t.done || t.cat === 'vault') return;
+        /* v0.50: scheduled start (date + time, default 08:00). Date reached
+           → the task moves to TODAY; date+time reached → it becomes NOW
+           (one-shot: the schedule then clears). */
+        if (t.startDate && t.startDate <= today) {
+          var tm = t.startTime || '08:00';
+          if (t.cat !== 'today') t.cat = 'today';
+          if (t.startDate < today || tm <= hm) {
+            t.now = true;
+            t.nowAt = null;
+            t.startDate = null;
+            t.startTime = null;
+          }
+          changed.push(t);
+          return;
+        }
+        /* v0.40: same-day hour tag → Now */
+        if (!t.now && t.nowAt && t.nowAt <= hm) {
+          t.now = true;
+          t.nowAt = null;
+          changed.push(t);
+        }
       });
-      return Promise.all(due.map(function (t) {
-        t.now = true;
-        t.nowAt = null;
-        return put('todos', t);
-      })).then(function () { return due.length; });
+      return Promise.all(changed.map(function (t) { return put('todos', t); }))
+        .then(function () { return changed.length; });
     });
+  }
+
+  /* ---- v0.51: in-app notification log (Program → 2 · Notification).
+     Device-local by design: 'notifLog' is not in the meta merge whitelist,
+     so it never crosses devices via sync. Capped at 50, newest first. ---- */
+  function getNotifs() {
+    return get('meta', 'notifLog').then(function (r) { return (r && r.value && r.value.items) || []; });
+  }
+  function logNotif(title, body) {
+    return getNotifs().then(function (items) {
+      items.unshift({ id: uid(), title: String(title || ''), body: String(body || ''), at: Date.now(), seen: false });
+      return putRaw('meta', { key: 'notifLog', value: { items: items.slice(0, 50) } });
+    });
+  }
+  function notifUnseen() {
+    return getNotifs().then(function (items) {
+      return items.filter(function (n) { return !n.seen; }).length;
+    });
+  }
+  function markNotifsSeen() {
+    return getNotifs().then(function (items) {
+      items.forEach(function (n) { n.seen = true; });
+      return putRaw('meta', { key: 'notifLog', value: { items: items } });
+    });
+  }
+  function clearNotifs() {
+    return putRaw('meta', { key: 'notifLog', value: { items: [] } });
+  }
+
+  /* v0.50: Habit (prio 'low', 🌱) — finishing the task plants a fresh copy
+     that starts tomorrow 08:00 (arrives in TODAY via promoteNowDue) and
+     counts the repetition. Milestones (25/100 — "Zen Habit Seed") later. */
+  function regenHabit(t) {
+    if (!t || t.prio !== 'low' || t.cat === 'vault') return Promise.resolve(null);
+    var d = new Date(Date.now() + 86400000);
+    var iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+    var copy = {
+      id: uid(), title: t.title, cat: 'later', now: false, nowAt: null,
+      prio: 'low', tags: (t.tags || []).slice(),
+      subs: (t.subs || []).map(function (s) { return { id: uid(), title: s.title, done: false }; }),
+      note: t.note || '', done: false, dueDate: null, time: null, allDay: false,
+      createdAt: Date.now(), startDate: iso, startTime: '08:00',
+      habitCount: (t.habitCount || 0) + 1, habitOf: t.habitOf || t.id
+    };
+    return put('todos', copy).then(function () { return copy; });
   }
 
   /* ---- local To-do backup: tasks (incl. Vault) + lists + tags ---- */
@@ -1401,7 +1480,10 @@ var DB = (function () {
     buildClaudeShare: buildClaudeShare,
     exportVault: exportVault, importVault: importVault,
     proposalMode: proposalMode, listProposals: listProposals, sendProposals: sendProposals,
-    promoteNowDue: promoteNowDue, exportTodoBackup: exportTodoBackup, importTodoBackup: importTodoBackup,
+    promoteNowDue: promoteNowDue, regenHabit: regenHabit,
+    getNotifs: getNotifs, logNotif: logNotif, notifUnseen: notifUnseen,
+    markNotifsSeen: markNotifsSeen, clearNotifs: clearNotifs,
+    exportTodoBackup: exportTodoBackup, importTodoBackup: importTodoBackup,
     exportSyncInfo: exportSyncInfo, importSyncInfo: importSyncInfo,
     importClaudeInbox: importClaudeInbox, applyClaudeDirect: applyClaudeDirect,
     applyProposal: applyProposal, propSummary: propSummary,

@@ -8,6 +8,7 @@ Screens.program = (function () {
 
   function render(el, parts) {
     if (!parts.length) return renderHome(el);
+    if (parts[0] === 'walk') return renderWalk(el, '#/program'); /* v0.51: moved here from Discipline */
     if (parts[0] === 'p') {
       if (parts.length === 2) return renderProgram(el, parts[1]);
       if (parts[2] === 'd') return renderProgram(el, parts[1]); /* legacy day links */
@@ -78,6 +79,52 @@ Screens.program = (function () {
   }
 
   /* ---------- home: every category with its programs, all on one page ---------- */
+  /* v0.51: Program home = three MAIN sections. Session fold state —
+     Fitness starts MINIMIZED (only Status=Active shows). */
+  var _secOpen = { fitness: false, notif: false, zen: false };
+
+  function mainSecHead(id, title, badge) {
+    return UI.el('<button class="main-sec' + (_secOpen[id] ? ' open' : '') + '" data-sec="' + id + '">' +
+      '<span class="ms-title">' + title + '</span>' +
+      (badge ? '<span class="ms-badge">' + UI.esc(badge) + '</span>' : '') +
+      '<span class="chev">' + UI.icon('chev') + '</span></button>');
+  }
+
+  function walkStatusForm(cur) {
+    var body = UI.el('<div>' + UI.field('Status', '<select id="wk-st">' + PROG_STATUSES.map(function (o) {
+      return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+    }).join('') + '</select>') + '</div>');
+    UI.modal('Incline Walk', body, [
+      { label: 'Cancel' },
+      {
+        label: 'Save', primary: true, onClick: function (close) {
+          DB.saveSettings({ walkStatus: body.querySelector('#wk-st').value }).then(function () { close(); App.route(); });
+        }
+      }
+    ]);
+  }
+
+  function walkRow() {
+    var wst = (DB.getSettings() || {}).walkStatus || 'active';
+    var row = UI.el('<div class="list prog-row prog-status-' + wst + '" data-id="__walk">' +
+      '<div class="list-item">' +
+      '<span class="li-thumb">' + UI.icon('walk') + '</span>' +
+      '<span class="li-main"><span class="li-title">Incline Walk</span>' +
+      '<span class="li-sub">12-3-30 recorder · ' + wst + '</span></span>' +
+      '<button class="btn-icon sm" aria-label="walk status">' + UI.icon('edit') + '</button>' +
+      '<span class="chev">' + UI.icon('chev') + '</span>' +
+      '</div></div>');
+    row.querySelector('.list-item').addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('.btn-icon')) return;
+      location.hash = '#/program/walk';
+    });
+    row.querySelector('.btn-icon').addEventListener('click', function (e) {
+      e.stopPropagation();
+      walkStatusForm(wst);
+    });
+    return row;
+  }
+
   function renderHome(el) {
     el.appendChild(UI.header({
       title: 'Program',
@@ -91,22 +138,84 @@ Screens.program = (function () {
     el.appendChild(pad);
     /* getProgramCats first — its one-time migration may rewrite programs */
     DB.getProgramCats().then(function (cats) {
-      return DB.all('programs').then(function (progs) { return [cats, progs]; });
-    }).then(function (res) {
-      var cats = res[0], progs = res[1];
-      progs.sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
-      cats.forEach(function (cat) {
-        var head = UI.el('<div class="cat-head" data-cat="' + UI.esc(cat) + '">' +
-          '<span class="cat-name">' + UI.esc(cat) + '</span>' +
-          '<button class="btn-mini plus" aria-label="add program to ' + UI.esc(cat) + '">' + UI.icon('plus') + '</button></div>');
-        head.querySelector('button').addEventListener('click', function () { newProgramForm(cat); });
-        pad.appendChild(head);
-        var zone = UI.el('<div class="cat-zone" data-cat="' + UI.esc(cat) + '"></div>');
-        var inCat = progs.filter(function (p) { return p.category === cat; });
-        if (!inCat.length) zone.appendChild(UI.el('<div class="cat-empty sub">no programs</div>'));
-        inCat.forEach(function (p) { zone.appendChild(progRow(p)); });
-        pad.appendChild(zone);
+      return Promise.all([DB.all('programs'), DB.notifUnseen()]).then(function (r2) {
+        return [cats, r2[0], r2[1]];
       });
+    }).then(function (res) {
+      var cats = res[0], progs = res[1], unseen = res[2];
+      var s = DB.getSettings() || {};
+      progs.sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+
+      /* ---- 1 · Fitness — programs by type/phase + the walk recorder ---- */
+      var fHead = mainSecHead('fitness', '1 · Fitness', _secOpen.fitness ? '' : 'Active only');
+      fHead.addEventListener('click', function () { _secOpen.fitness = !_secOpen.fitness; App.route(); });
+      pad.appendChild(fHead);
+      var fBody = UI.el('<div class="ms-body"></div>');
+      pad.appendChild(fBody);
+      if (_secOpen.fitness) {
+        /* maximized: recorder + the full category layout */
+        fBody.appendChild(walkRow());
+        cats.forEach(function (cat) {
+          var head = UI.el('<div class="cat-head" data-cat="' + UI.esc(cat) + '">' +
+            '<span class="cat-name">' + UI.esc(cat) + '</span>' +
+            '<button class="btn-mini plus" aria-label="add program to ' + UI.esc(cat) + '">' + UI.icon('plus') + '</button></div>');
+          head.querySelector('button').addEventListener('click', function () { newProgramForm(cat); });
+          fBody.appendChild(head);
+          var zone = UI.el('<div class="cat-zone" data-cat="' + UI.esc(cat) + '"></div>');
+          var inCat = progs.filter(function (p) { return p.category === cat; });
+          if (!inCat.length) zone.appendChild(UI.el('<div class="cat-empty sub">no programs</div>'));
+          inCat.forEach(function (p) { zone.appendChild(progRow(p)); });
+          fBody.appendChild(zone);
+        });
+      } else {
+        /* minimized: only entries with Status = Active */
+        if (((s.walkStatus || 'active')) === 'active') fBody.appendChild(walkRow());
+        var act = progs.filter(function (p) { return (p.status || 'reserve') === 'active'; });
+        if (!act.length) fBody.appendChild(UI.el('<div class="cat-empty sub">no active programs — tap the Fitness bar to see all</div>'));
+        act.forEach(function (p) { fBody.appendChild(progRow(p)); });
+      }
+
+      /* ---- 2 · Notification — in-app notification log; viewing clears ---- */
+      var nHead = mainSecHead('notif', '2 · Notification', unseen ? unseen + ' new' : '');
+      nHead.addEventListener('click', function () {
+        _secOpen.notif = !_secOpen.notif;
+        if (_secOpen.notif) DB.markNotifsSeen().then(function () { App.route(); });
+        else App.route();
+      });
+      pad.appendChild(nHead);
+      if (_secOpen.notif) {
+        var nBody = UI.el('<div class="ms-body"></div>');
+        pad.appendChild(nBody);
+        DB.getNotifs().then(function (items) {
+          if (!items.length) {
+            nBody.appendChild(UI.el('<div class="cat-empty sub">no notifications</div>'));
+            return;
+          }
+          var list = UI.el('<div class="list"></div>');
+          items.forEach(function (n) {
+            var d = new Date(n.at || 0);
+            var when = String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+              ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+            list.appendChild(UI.el('<div class="list-item"><span class="li-main">' +
+              '<span class="li-title">' + UI.esc(n.title) + '</span>' +
+              (n.body ? '<span class="li-sub">' + UI.esc(n.body) + '</span>' : '') + '</span>' +
+              '<span class="li-sub">' + when + '</span></div>'));
+          });
+          nBody.appendChild(list);
+          var clr = UI.el('<button class="btn btn-block" style="margin-top:6px">Clear all</button>');
+          clr.addEventListener('click', function () { DB.clearNotifs().then(function () { App.route(); }); });
+          nBody.appendChild(clr);
+        });
+      }
+
+      /* ---- 3 · Zen Habit Seed — reserved (Alef plans it first) ---- */
+      var zHead = mainSecHead('zen', '3 · Zen Habit Seed', '🌱');
+      zHead.addEventListener('click', function () { _secOpen.zen = !_secOpen.zen; App.route(); });
+      pad.appendChild(zHead);
+      if (_secOpen.zen) {
+        pad.appendChild(UI.el('<div class="ms-body"><div class="cat-empty sub">🌱 Coming soon — grow Habits by repetition. ' +
+          'Finishing a 🌱 task already replants it for tomorrow 08:00 and counts (×N); milestones at ×25 and ×100 arrive here once the design is set.</div></div>'));
+      }
     });
   }
 
@@ -427,6 +536,9 @@ Screens.program = (function () {
     Promise.all([DB.get('programs', pid), DB.get('exercises', xid).then(function (x) { return x ? DB.hydrateExMedia(x) : x; }), DB.byIndex('logs', 'exerciseId', xid)]).then(function (res) {
       var p = res[0], x = res[1], history = res[2];
       if (!x) { el.appendChild(UI.emptyState('Exercise not found')); return; }
+      /* v0.51: Cardiovascular exercises record with the incline-walk
+         pattern (incline / speed / minutes) — not the Wt/Rep table */
+      if (x.categoryId === 'cardio') { renderWalk(el, '#/program/p/' + pid, x.name); return; }
       el.appendChild(UI.header({ title: x.name, back: '#/program/p/' + pid }));
       var pad = UI.el('<div class="pagepad"></div>');
       el.appendChild(pad);
@@ -968,6 +1080,89 @@ Screens.program = (function () {
 
     paint();
     return cardT;
+  }
+
+  /* ---- v0.51: Incline Walk recorder (moved here from Discipline) ----
+     Also serves as the special record pattern for every Cardiovascular
+     exercise: incline / speed / minutes, prefilled from the last session. */
+  function renderWalk(el, backHref, title) {
+    el.appendChild(UI.header({ title: title || 'Incline Walk', back: backHref || '#/program' }));
+    var pad = UI.el('<div class="pagepad"></div>');
+    el.appendChild(pad);
+    var wrap = UI.el('<div></div>');
+    pad.appendChild(wrap);
+
+    function draw() {
+      wrap.innerHTML = '';
+      DB.all('walks').then(function (rows) {
+        if (!rows.length) {
+          wrap.appendChild(UI.emptyState('No incline walks yet', 'Tap + to record a 12-3-30 style session'));
+          return;
+        }
+        rows.sort(function (a, b) { return b.date.localeCompare(a.date); });
+        var recent = rows.slice(0, 60);
+        var list = UI.el('<div class="list"></div>');
+        recent.forEach(function (w) {
+          var it = UI.el('<div class="list-item">' +
+            '<span class="li-thumb">' + UI.icon('walk') + '</span>' +
+            '<span class="li-main"><span class="li-title">' + w.incline + '% · ' + w.speed + ' · ' + w.minutes + ' min</span>' +
+            '<span class="li-sub">' + UI.fmtDate(w.date) + '</span></span>' +
+            '<button class="btn-icon" aria-label="delete">' + UI.icon('trash') + '</button></div>');
+          it.querySelector('.btn-icon').addEventListener('click', function (e) {
+            e.stopPropagation();
+            UI.confirm('Delete this walk?', 'Delete').then(function (ok) { if (ok) DB.del('walks', w.id).then(draw); });
+          });
+          it.querySelector('.li-main').addEventListener('click', function () { walkForm(w, draw); });
+          list.appendChild(it);
+        });
+        wrap.appendChild(list);
+      });
+    }
+
+    el.appendChild(UI.fab('Record walk', function () { walkForm(null, draw); }));
+    draw();
+  }
+
+  function walkForm(existing, onSaved) {
+    DB.all('walks').then(function (rows) {
+      rows.sort(function (a, b) { return a.date.localeCompare(b.date); });
+      var last = rows[rows.length - 1];
+      var w = existing || {
+        id: DB.uid(),
+        date: DB.todayISO(),
+        incline: last ? last.incline : 12,
+        speed: last ? last.speed : 3,
+        minutes: last ? last.minutes : 30
+      };
+      var today = DB.todayISO();
+      var body = UI.el('<div>' +
+        UI.field('Date (past or today only)', '<input type="date" id="wf-date" value="' + w.date + '" max="' + today + '">') +
+        '<div class="row2">' +
+        UI.field('Incline %', '<input type="number" id="wf-inc" step="0.5" min="0" max="30" inputmode="decimal" value="' + w.incline + '">') +
+        UI.field('Speed', '<input type="number" id="wf-spd" step="0.1" min="1" max="10" inputmode="decimal" value="' + w.speed + '">') +
+        '</div>' +
+        UI.field('Time (minutes)', '<input type="number" id="wf-min" step="5" min="5" max="180" inputmode="numeric" value="' + w.minutes + '">') +
+        '</div>');
+      body.querySelectorAll('input[type=number]').forEach(function (inp) {
+        inp.addEventListener('focus', function () { this.select(); });
+      });
+      UI.modal(existing ? 'Edit walk' : 'Record incline walk', body, [
+        { label: 'Cancel' },
+        {
+          label: 'Save', primary: true, onClick: function (close) {
+            var date = body.querySelector('#wf-date').value;
+            if (!date) { UI.toast('Pick a date'); return; }
+            if (date > today) { UI.toast('Future dates are not allowed'); return; }
+            w.date = date;
+            w.incline = parseFloat(body.querySelector('#wf-inc').value) || 0;
+            w.speed = parseFloat(body.querySelector('#wf-spd').value) || 0;
+            w.minutes = parseInt(body.querySelector('#wf-min').value, 10) || 0;
+            if (!w.incline || !w.speed || !w.minutes) { UI.toast('Fill incline, speed and time'); return; }
+            DB.put('walks', w).then(function () { UI.toast('Saved'); close(); onSaved && onSaved(); });
+          }
+        }
+      ]);
+    });
   }
 
   return { render: render };

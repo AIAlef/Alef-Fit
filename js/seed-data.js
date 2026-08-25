@@ -9,7 +9,7 @@
    Existing installs top up on next launch (db.js seedTopUp): entries whose
    name is not in the library yet are added — user edits are never touched.
    Workflow: HowToAddNewExercise.txt in the project root. */
-var SEED_REV = 1;
+var SEED_REV = 2; /* v0.51: + Incline Walk (Cardiovascular) */
 
 var SEED_EXERCISES = [
 /* ---- chest ---- */
@@ -164,6 +164,8 @@ var SEED_EXERCISES = [
 { n: "Sit-Up", c: "abs", m: ["Rectus Abdominis", "Hip Flexors"], s: ["Lie down, knees bent, feet anchored if needed.", "Sit all the way up, exhaling at the top.", "Lower with control, vertebra by vertebra.", "⚠ Caution: Do not yank the neck or throw the torso up — control both directions."], media: [{ type: "image", src: "exercise-img/Sit-Up 01.jpg" }, { type: "image", src: "exercise-img/Sit-Up 02.jpg" }, { type: "image", src: "exercise-img/Sit-Up 03.jpg" }] },
 { n: "Superman", c: "abs", m: ["Erector Spinae", "Glutes", "Rear Deltoid"], s: ["Lie face down, arms extended overhead.", "Lift the arms, chest and legs together.", "Hold briefly, then lower.", "⚠ Caution: Lift to a comfortable height only; do not crank the neck or over-arch."], media: [{ type: "image", src: "exercise-img/Superman 01.jpg" }, { type: "image", src: "exercise-img/Superman 02.jpg" }] },
 { n: "Twisting Hip Raise", c: "abs", m: ["Lower Abs", "Obliques"], s: ["Lie on the back, legs up, hands at the sides.", "Curl the hips off the floor, twisting slightly to one side.", "Lower under control and alternate sides.", "⚠ Caution: Use the abs to lift the hips — do not swing the legs for momentum."], media: [{ type: "image", src: "exercise-img/Twisting Hip Raise 01.jpg" }, { type: "image", src: "exercise-img/Twisting Hip Raise 02.jpg" }, { type: "image", src: "exercise-img/Twisting Hip Raise 03.jpg" }, { type: "image", src: "exercise-img/Twisting Hip Raise 04.jpg" }] },
+/* ---- cardiovascular (v0.51: special incline-walk record pattern) ---- */
+{ n: "Incline Walk", c: "cardio", m: ["Cardiovascular System", "Glutes", "Calves", "Hamstrings"], s: ["Set the treadmill to a steep incline (12-3-30 style: 12% incline, speed 3, 30 minutes).", "Walk tall with a natural stride — no hunching over the console.", "Hands off the rails; pump the arms and breathe steadily.", "⚠ Caution: Lower the incline or speed rather than grabbing the rails; build duration gradually."], media: [] },
 ];
 
 var SEED_PROGRAMS = [

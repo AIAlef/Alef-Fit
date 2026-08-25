@@ -1,6 +1,6 @@
 /* Alef.Fit service worker — cache-first app shell for offline use.
    Bump CACHE on every release (matches APP_VERSION). */
-var CACHE = 'alef-fit-v0.48.0';
+var CACHE = 'alef-fit-v0.51.0';
 var ASSETS = [
   './', './index.html', './oauth.html', './css/app.css', './manifest.webmanifest',
   './js/db.js', './js/native.js', './js/ui.js', './js/seed-data.js', './js/sync.js', './js/devtext.js', './js/app.js',
@@ -10,7 +10,7 @@ var ASSETS = [
   './assets/catbg/chest.jpg', './assets/catbg/back.jpg', './assets/catbg/leg.jpg',
   './assets/catbg/shoulder.jpg', './assets/catbg/bicep.jpg', './assets/catbg/triceps.jpg',
   './assets/catbg/abs.jpg', './assets/catbg/compound.jpg', './assets/catbg/functional.jpg',
-  './assets/catbg/stretching.jpg',
+  './assets/catbg/stretching.jpg', './assets/catbg/cardio.jpg',
   './assets/cardbg/disc-todo.jpg', './assets/cardbg/disc-note.jpg',
   './assets/cardbg/disc-bb.jpg', './assets/cardbg/disc-alarm.jpg',
   './assets/cardbg/disc-walk.jpg', './assets/cardbg/retro-cal.jpg',

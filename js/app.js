@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.48.0';
+var APP_VERSION = '0.51.0';
 
 var App = (function () {
 
@@ -121,6 +121,7 @@ var App = (function () {
 
   function notify(title, body) {
     UI.toast(title);
+    if (DB.logNotif) DB.logNotif(title, body); /* v0.51: Program → Notification log */
     if ('Notification' in window && Notification.permission === 'granted') {
       try { new Notification(title, { body: body || '', icon: 'assets/icons/icon-192.png' }); } catch (e) { /* ignore */ }
     }

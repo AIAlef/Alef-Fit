@@ -10,6 +10,8 @@ window.Screens = window.Screens || {};
 
 Screens.setup = (function () {
 
+  var _syncedNow = false; /* v0.49: a Full Sync finished during this setup */
+
   function render(el) {
     el.appendChild(UI.header({ title: 'Set up this app' }));
     var pad = UI.el('<div class="pagepad"></div>');
@@ -85,6 +87,7 @@ Screens.setup = (function () {
       Sync.syncNow(function (msg) { s3.textContent = msg || '…'; })
         .then(function (res) {
           b3.disabled = false;
+          _syncedNow = true; /* v0.49: unlocks step 4 — claim AFTER the data is here */
           var p = res.pulled || { added: 0, updated: 0 };
           s3.textContent = '✓ Synced: +' + p.added + ' / ~' + p.updated + ' · media ↓' + res.mediaDown;
         })
@@ -100,8 +103,8 @@ Screens.setup = (function () {
     var bP = UI.el('<button class="btn btn-block" style="margin-bottom:8px">This is the PC — main workstation</button>');
     c4.appendChild(UI.el('<div class="sub" style="margin-bottom:8px">S26: Vault, Claude share writer, real alarms. ' +
       'PC: development seat — edits travel as proposals. Claiming a role RETIRES any older install of the same role ' +
-      '(it stops sharing/alarming; its data stays).</div>'));
-    function claim(role) {
+      '(it stops sharing/alarming; its data stays). <b>Finish 3 · Full Sync first</b> — the claim unlocks after your data has arrived.</div>'));
+    function reallyClaim(role) {
       UI.confirm('Make THIS app the main ' + role + '? An older ' + role + ' install will retire on its next sync.', 'Claim ' + role)
         .then(function (ok) {
           if (!ok) return;
@@ -111,6 +114,23 @@ Screens.setup = (function () {
             else { location.hash = '#/discipline/todo'; }
           });
         });
+    }
+    /* v0.49: claiming a role BEFORE the data has synced made a fresh, empty
+       install the main writer. The claim now requires a finished Full Sync
+       (this session, or an earlier one on this install). Only when NO Google
+       connection exists at all (a true from-scratch start) may the user
+       claim after an explicit extra warning. */
+    function claim(role) {
+      DB.get('meta', 'lastSyncAt').then(function (r) {
+        if (_syncedNow || (r && r.value)) { reallyClaim(role); return; }
+        if (Sync.hasClientId()) {
+          UI.toast('Run 3 · Full Sync first — claim the role after your data has arrived');
+          return;
+        }
+        UI.confirm('No Google sync is set up and nothing has been pulled. Claim ' + role +
+          ' main with ONLY the data currently on this device? (For a new phone: do steps 1–3 first.)', 'Claim anyway')
+          .then(function (ok) { if (ok) reallyClaim(role); });
+      });
     }
     bS.addEventListener('click', function () { claim('S26'); });
     bP.addEventListener('click', function () { claim('PC'); });

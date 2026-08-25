@@ -121,6 +121,13 @@ Screens.exercise = (function () {
       pad.appendChild(UI.el('<div class="card"><div>' + UI.esc((r.muscles || []).join(', ') || '—') + '</div>' +
         '<div class="sub">' + UI.esc(cat.name) + '</div></div>'));
 
+      /* v0.51: cardiovascular exercises use the special incline-walk
+         record pattern (incline / speed / minutes) instead of Wt/Rep */
+      if (r.categoryId === 'cardio') {
+        pad.appendChild(UI.el('<a class="card" href="#/program/walk"><h2>' + UI.icon('walk') + ' Record session</h2>' +
+          '<div class="sub">Incline / speed / minutes — prefills your last session</div></a>'));
+      }
+
       pad.appendChild(UI.el('<div class="section-title">How to do / Technique</div>'));
       var stepsCard = UI.el('<div class="card"></div>');
       if ((r.steps || []).length) {

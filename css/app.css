@@ -323,6 +323,17 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .mv-thumb img { display: block; }
 .mv-thumb.fit-h img { height: 100%; width: auto; max-width: none; }
 .mv-thumb.fit-w img { width: 100%; height: auto; max-height: none; }
+/* v0.49: download-all button while its job runs — animated arrow + % */
+.dl-btn { display: inline-flex; align-items: center; gap: 3px; }
+.dl-btn.dl-run .icon { animation: dlpulse 1s ease-in-out infinite; }
+@keyframes dlpulse {
+  0%, 100% { transform: translateY(-2px); opacity: .7; }
+  50% { transform: translateY(2px); opacity: 1; }
+}
+.dl-pct { font-size: .68rem; font-weight: 700; color: var(--accent, #4d9aff); min-width: 26px; text-align: left; }
+/* v0.49: image viewer zoom */
+.imgview.zoomed img { cursor: zoom-out; }
+
 .mv-loc {
   position: absolute; left: 6px; top: 6px; z-index: 2;
   background: rgba(0,0,0,.55); color: #7fdc8a; border-radius: 999px;
@@ -1188,10 +1199,70 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 /* v0.27: Vault label, Now-in-Today borders, Now-at time */
 .td-vault-label { margin-left: 8px; font-size: inherit; letter-spacing: inherit; }
 .td-nowrow { border: 1.6px solid #d9a441; border-radius: 10px; margin: 3px 6px; width: auto; }
-.td-nowat {
+.td-nowat, .td-startd {
   border: 1px solid var(--line); background: var(--surface2); color: var(--text2);
   border-radius: 999px; padding: 2px 8px; font: inherit; font-size: .72rem; width: auto;
 }
+
+/* ---- v0.51: Program main sections (Fitness / Notification / Zen) ---- */
+.main-sec {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin: 10px 0 6px; padding: 11px 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--text); font: inherit; font-weight: 800; letter-spacing: .02em;
+  cursor: pointer; text-align: left;
+}
+.main-sec .ms-title { flex: 1; }
+.main-sec .ms-badge {
+  font-size: .68rem; font-weight: 700; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 999px; padding: 1px 8px;
+}
+.main-sec .chev svg { transition: transform .15s; }
+.main-sec.open .chev svg { transform: rotate(90deg); }
+.ms-body { margin: 0 0 4px; }
+
+/* ---- v0.50: task sheet fills the screen ---- */
+.modal-full {
+  height: 94vh; max-height: 94vh; width: 100%; max-width: 640px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-full .modal-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.modal-full .modal-btns { margin-top: 10px; flex-wrap: nowrap; }
+/* visually-hidden text inside icon buttons (a11y + tests) */
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* footer: ✕ ¼ · 🗑 ¼ · 💾 ½ (right) */
+.modal-btns .btn.tds-sm { flex: 1 1 0; }
+.modal-btns .btn.tds-save { flex: 2 1 0; }
+.modal-btns .btn .icon svg { width: 19px; height: 19px; vertical-align: -4px; }
+.btn[disabled], .btn-icon[disabled] { opacity: .38; cursor: default; pointer-events: none; }
+.mtitle-btn2 { right: 42px; }
+/* title is a wrapping, auto-growing textarea now */
+.td-sheet .td-title-in { resize: none; overflow-y: auto; line-height: 1.35; }
+/* hour chips: tighter, one row */
+.td-sheet .td-tagrow { gap: 4px; }
+.td-sheet .td-hr-chip { min-width: 26px; padding: 3px 4px !important; }
+.td-startd { max-width: 122px; }
+/* note + subtasks: word wrap, auto-grow, gesture scroll */
+.td-sheet .td-note { resize: none; overflow-y: auto; }
+.td-note-min { overflow-y: auto; }
+.td-sub-row .td-sub-title { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+/* checkbox aligns with the FIRST text row (list + sheet subtasks) */
+.td-zone .todo-item { align-items: flex-start; }
+.td-zone .todo-item .li-main { justify-content: flex-start; }
+.td-zone .todo-item input[type="checkbox"] { margin-top: 3px; }
+.td-sheet .td-sub-row { align-items: flex-start; }
+.td-sheet .td-sub-row input[type="checkbox"] { margin-top: 4px; }
+/* drag: an insertion LINE above/below rows (not a border around one) */
+.todo-item, .td-sub-row { position: relative; }
+.ins-above::before, .ins-below::after {
+  content: ''; position: absolute; left: 8px; right: 8px; height: 0;
+  border-top: 3px solid var(--accent); border-radius: 2px; z-index: 5;
+}
+.ins-above::before { top: -2px; }
+.ins-below::after { bottom: -2px; }
+/* Habit (🌱) badge + row mark */
+.td-badge.td-b-yellow { font-size: 13px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.td-pmark { font-size: .72rem; vertical-align: 1px; }
 
 /* v0.40: one-tap hour chips (task sheet) + list-row hour/priority marks */
 .td-hr-chip {

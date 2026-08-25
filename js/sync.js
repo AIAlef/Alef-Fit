@@ -37,6 +37,15 @@ window.Sync = (function () {
      flow for OAuth clients created after 2025). First sync opens a Google
      popup once; the refresh token is kept locally so later syncs are
      silent. Needs client ID + client secret from the Cloud Console. */
+  /* v0.49: hard offline guard. In airplane mode the refresh-token POST
+     fails as a NETWORK error, which used to fall through to an interactive
+     sign-in — an endless credentials popup while offline. Now: no network →
+     one clear error, never a popup. */
+  function isOffline() {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+  }
+  var OFFLINE_MSG = 'No internet connection — sync will resume when you are back online';
+
   function creds() {
     var st = DB.getSettings() || {};
     return { id: (st.gdriveClientId || '').trim(), secret: (st.gdriveClientSecret || '').trim() };
@@ -106,6 +115,7 @@ window.Sync = (function () {
   }
 
   function interactiveCode() {
+    if (isOffline()) return Promise.reject(new Error(OFFLINE_MSG)); /* v0.49: never pop sign-in while offline */
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
       return nativeInteractive();
     }
@@ -144,6 +154,7 @@ window.Sync = (function () {
 
   function getToken() {
     if (_token && Date.now() < _tokenExp - 60000) return Promise.resolve(_token);
+    if (isOffline()) return Promise.reject(new Error(OFFLINE_MSG)); /* v0.49 */
     var c = creds();
     if (!c.id || !c.secret) return Promise.reject(new Error('Set the Google client ID and secret in Setting → Google Drive sync'));
     return DB.get('meta', 'gdriveRefreshToken').then(function (row) {
@@ -155,8 +166,14 @@ window.Sync = (function () {
         _token = tok.access_token;
         _tokenExp = Date.now() + (tok.expires_in || 3600) * 1000;
         return _token;
-      }).catch(function () {
-        /* refresh token revoked/expired → one interactive round */
+      }).catch(function (err) {
+        /* v0.49: only a REAL rejection from Google (revoked/expired token —
+           "Google token error: …") may open the sign-in. A network failure
+           (offline, DNS, captive portal) surfaces as a plain error. */
+        var m = String(err && err.message || err);
+        if (isOffline() || m.indexOf('Google token error') !== 0) {
+          throw new Error(OFFLINE_MSG);
+        }
         return interactiveCode();
       });
     });
@@ -590,6 +607,26 @@ window.Sync = (function () {
       return api('files/' + id + '?alt=media', { raw: true });
     }).then(function (r) { return r.blob(); });
   }
+  /* v0.49: upload a NEW file (added from the phone gallery) into the
+     collection's Drive folder — multipart/related with the raw bytes. */
+  function motivUpload(name, mime, buf, folderId) {
+    var boundary = 'alefb' + Date.now().toString(36);
+    var head = '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify({ name: name, parents: [folderId] }) +
+      '\r\n--' + boundary + '\r\nContent-Type: ' + (mime || 'application/octet-stream') + '\r\n\r\n';
+    var tail = '\r\n--' + boundary + '--';
+    var body;
+    try { body = new Blob([head, buf, tail]); }
+    catch (e) { body = head + tail; /* jsdom only — real browsers take the Blob */ }
+    return getToken().then(function () {
+      return api('files?uploadType=multipart&fields=id,name,mimeType,thumbnailLink', {
+        method: 'POST', upload: true,
+        headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+        body: body
+      });
+    });
+  }
+
   function motivThumb(url) {
     if (!url) return Promise.resolve(null);
     return getToken().then(function () {
@@ -611,7 +648,8 @@ window.Sync = (function () {
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
     /* v0.44 Fitness Motivation + v0.47 Aesthetic Collection (Drive folders) */
     motivList: motivList, motivPatch: motivPatch, motivBlob: motivBlob,
-    motivThumb: motivThumb, motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
+    motivThumb: motivThumb, motivUpload: motivUpload,
+    motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
     hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }
