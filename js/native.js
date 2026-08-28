@@ -105,15 +105,45 @@ window.Native = (function () {
     return (C.Plugins && C.Plugins.Filesystem) || null;
   }
   function canSaveFiles() { return !!fsPlugin(); }
-  /* text files (JSON backups); resolves the human-readable path or null */
-  function saveText(filename, text) {
+  var _lastSaveError = '';
+  function lastSaveError() { return _lastSaveError; }
+  /* text files (JSON backups); resolves the human-readable path or null.
+     v0.53 BUGFIX: a Full backup is one giant JSON string (all media as
+     base64) — pushing it through the Capacitor bridge in ONE writeFile
+     call fails on Android ("cannot save full backup, Vault works").
+     Now: big payloads stream in ~3 MB chunks via appendFile. */
+  var CHUNK = 3 * 1024 * 1024;
+  function saveText(filename, text, onProgress) {
     var p = fsPlugin();
     if (!p) return Promise.resolve(null);
-    return p.writeFile({
-      path: SAVE_DIR + '/' + filename, data: text,
+    _lastSaveError = '';
+    var path = SAVE_DIR + '/' + filename;
+    var human = 'Documents/' + SAVE_DIR + '/' + filename;
+    var total = text.length;
+    function report(done) { if (onProgress) { try { onProgress(done, total); } catch (e) { /* ok */ } } }
+    var first = text.slice(0, CHUNK);
+    var chain = p.writeFile({
+      path: path, data: first,
       directory: 'DOCUMENTS', encoding: 'utf8', recursive: true
-    }).then(function () { return 'Documents/' + SAVE_DIR + '/' + filename; })
-      .catch(function () { return null; });
+    }).then(function () { report(first.length); });
+    var off = first.length;
+    while (off < total) {
+      (function (start) {
+        var end = Math.min(start + CHUNK, total);
+        chain = chain.then(function () {
+          return p.appendFile({
+            path: path, data: text.slice(start, end),
+            directory: 'DOCUMENTS', encoding: 'utf8'
+          }).then(function () { report(end); });
+        });
+      })(off);
+      off += CHUNK;
+    }
+    return chain.then(function () { return human; })
+      .catch(function (err) {
+        _lastSaveError = String((err && err.message) || err || 'unknown error');
+        return null;
+      });
   }
   /* binary files from a base64 payload (photos/videos) */
   function saveBase64(filename, b64) {
@@ -127,5 +157,6 @@ window.Native = (function () {
   }
 
   return { isNative: isNative, syncAlarms: syncAlarms, init: init, openExternal: openExternal,
-           canSaveFiles: canSaveFiles, saveText: saveText, saveBase64: saveBase64 };
+           canSaveFiles: canSaveFiles, saveText: saveText, saveBase64: saveBase64,
+           lastSaveError: lastSaveError };
 })();

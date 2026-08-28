@@ -11,10 +11,11 @@ window.Sync = (function () {
   var SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
   var SCOPE_FILE = 'https://www.googleapis.com/auth/drive.file';
   var SCOPE_DRIVE = 'https://www.googleapis.com/auth/drive'; /* v0.44: Fitness Motivation folder (user's own files) */
+  var SCOPE_CAL = 'https://www.googleapis.com/auth/calendar.events'; /* v0.53: Schedules — work calendar (read + ✓-retitle) */
   /* the Claude share file is visible → needs drive.file too; only ask when on */
   function scopes() {
     var st = DB.getSettings() || {};
-    return SCOPE + (st.claudeShareOn ? ' ' + SCOPE_FILE : '') + ' ' + SCOPE_DRIVE;
+    return SCOPE + (st.claudeShareOn ? ' ' + SCOPE_FILE : '') + ' ' + SCOPE_DRIVE + ' ' + SCOPE_CAL;
   }
   var API = 'https://www.googleapis.com/drive/v3/';
   var UPLOAD = 'https://www.googleapis.com/upload/drive/v3/';
@@ -642,8 +643,82 @@ window.Sync = (function () {
     }).catch(function () { return null; });
   }
 
+  /* ---- v0.53: Schedules — the WORK calendar (alefthieng) as read-mostly
+     to-dos in Alef.do. Full-day-or-longer events, next 30 days. The ONE
+     write we ever do: ✓-retitle on completion (decided 2026-08-28) —
+     AwesomeCalendar stays the editor for everything else. ---- */
+  var CAL_API = 'https://www.googleapis.com/calendar/v3/calendars/';
+  function schedCalId() {
+    var st = DB.getSettings() || {};
+    return (st.workCalId || 'alefthieng@gmail.com').trim();
+  }
+  function schedList() {
+    return getToken().then(function () {
+      var now = new Date();
+      var max = new Date(now.getTime() + 30 * 86400000);
+      var url = CAL_API + encodeURIComponent(schedCalId()) + '/events?' +
+        'timeMin=' + encodeURIComponent(now.toISOString()) +
+        '&timeMax=' + encodeURIComponent(max.toISOString()) +
+        '&singleEvents=true&orderBy=startTime&maxResults=100' +
+        '&fields=' + encodeURIComponent('items(id,summary,start,end,status)');
+      return fetch(url, { headers: { Authorization: 'Bearer ' + _token } });
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) {
+        throw new Error('Calendar error ' + r.status + ': ' + t.slice(0, 140));
+      });
+      return r.json();
+    }).then(function (j) {
+      var out = [];
+      (j.items || []).forEach(function (ev) {
+        if (ev.status === 'cancelled') return;
+        var allDay = !!(ev.start && ev.start.date);
+        var startIso = allDay ? ev.start.date : (ev.start && ev.start.dateTime);
+        var endIso = allDay ? (ev.end && ev.end.date) : (ev.end && ev.end.dateTime);
+        if (!startIso) return;
+        var ms = (endIso ? new Date(endIso) : new Date(startIso)) - new Date(startIso);
+        if (!allDay && ms < 86400000) return;        /* full day or longer only */
+        out.push({
+          id: ev.id, title: ev.summary || '(no title)', allDay: allDay,
+          start: String(startIso).slice(0, 10),
+          /* all-day end date is EXCLUSIVE in the API — show the real last day */
+          end: endIso ? String(new Date(new Date(endIso) - (allDay ? 86400000 : 0)).toISOString()).slice(0, 10)
+                      : String(startIso).slice(0, 10)
+        });
+      });
+      return out;
+    });
+  }
+  function schedSetDone(eventId, done) {
+    /* ✓ prefix on the REAL calendar event title (reversible) */
+    return getToken().then(function () {
+      var url = CAL_API + encodeURIComponent(schedCalId()) + '/events/' + encodeURIComponent(eventId) +
+        '?fields=' + encodeURIComponent('id,summary');
+      return fetch(url, { headers: { Authorization: 'Bearer ' + _token } })
+        .then(function (r) {
+          if (!r.ok) throw new Error('Calendar error ' + r.status);
+          return r.json();
+        })
+        .then(function (ev) {
+          var t = String(ev.summary || '');
+          var has = /^✓\s*/.test(t);
+          if (done === has) return ev;              /* already in that state */
+          var next = done ? ('✓ ' + t) : t.replace(/^✓\s*/, '');
+          return fetch(url, {
+            method: 'PATCH',
+            headers: { Authorization: 'Bearer ' + _token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ summary: next })
+          }).then(function (r2) {
+            if (!r2.ok) throw new Error('Calendar error ' + r2.status);
+            return r2.json();
+          });
+        });
+    });
+  }
+
   return {
     syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
+    /* v0.53 Schedules (work calendar) */
+    schedList: schedList, schedSetDone: schedSetDone, schedCalId: schedCalId,
     /* v0.31 instant sync: header button + pull-on-open (Part D) */
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
     /* v0.44 Fitness Motivation + v0.47 Aesthetic Collection (Drive folders) */

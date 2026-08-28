@@ -72,16 +72,20 @@ Screens.discipline = (function () {
 
   /* priority levels — badge colors; default Grey (uncategorized) */
   var TD_PRIOS = [
+    /* v0.53: METAL ramp (Alef's choice) — Bronze → Silver → Gold →
+       Platinum(💎), so the colors READ as rising priority. Habit 🌱 is
+       "very very high": platinum-class background + the sprout glyph. */
     ['highest', 'Highest', 'diamond'],
     ['vhigh', 'Very high', 'gold'],
-    ['high', 'High', 'red'],
-    ['medium', 'Medium', 'blue'],
-    ['low', 'Habit', 'yellow'], /* v0.50: Low became Habit 🌱 (same slot) */
+    ['high', 'High', 'silver'],
+    ['medium', 'Medium', 'bronze'],
+    ['low', 'Habit', 'habit'], /* v0.50: Low became Habit 🌱 (same slot) */
     ['none', 'N/A', 'grey'],
     ['monkey', 'Never', 'purple']
   ];
-  /* v0.40: rank for the Today sort — Now tasks order by rating */
-  var TD_PRIO_RANK = { highest: 0, vhigh: 1, high: 2, medium: 3, low: 4, none: 5, monkey: 6 };
+  /* v0.40: rank for the Today sort — Now tasks order by rating.
+     v0.53: Habit ranks as very-very-high — above Gold, below 💎. */
+  var TD_PRIO_RANK = { highest: 0, low: 1, vhigh: 2, high: 3, medium: 4, none: 5, monkey: 6 };
   function prioName(id) {
     var p = TD_PRIOS.filter(function (x) { return x[0] === id; })[0];
     return p ? p[1] : 'N/A';
@@ -300,6 +304,86 @@ Screens.discipline = (function () {
     });
   }
 
+  /* ---- v0.53: Schedules — full-day events of the WORK calendar shown as
+     to-dos under PROJECT. Read-mostly: the ONE write is the ✓ checkbox,
+     which renames the REAL event ("✓ …") so AwesomeCalendar shows it too
+     (decided 2026-08-28). Everything else is managed in AwesomeCalendar.
+     Cache: meta 'schedList' (device-local), refreshed when >1 h old. */
+  var _schedBox = null;
+  function schedFmtD(iso) { return iso.slice(8, 10) + '-' + iso.slice(5, 7); }
+  function drawSched(box, cache) {
+    box.innerHTML = '';
+    var items = (cache && cache.items) || [];
+    box.appendChild(UI.el('<div class="section-title sched-title">Schedules <span class="tdc-n">(' +
+      items.length + ' · 30d)</span></div>'));
+    if (cache && cache.error) {
+      box.appendChild(UI.el('<div class="sub sched-hint">⚠ ' + UI.esc(String(cache.error)) +
+        (/403|401/.test(String(cache.error)) ? ' — Setting → Share with Claude → Connect (grants the new Calendar permission), then reopen' : '') +
+        '</div>'));
+    }
+    if (!items.length) {
+      if (!(cache && cache.error)) {
+        box.appendChild(UI.el('<div class="sub sched-hint">Full-day events from the work calendar (next 30 days) appear here — managed in AwesomeCalendar.</div>'));
+      }
+      return;
+    }
+    var zone = UI.el('<div class="list"></div>');
+    items.forEach(function (ev) {
+      var isDone = /^✓\s*/.test(ev.title);
+      var showT = ev.title.replace(/^✓\s*/, '');
+      var range = schedFmtD(ev.start) + (ev.end !== ev.start ? ' → ' + schedFmtD(ev.end) : '');
+      var row = UI.el('<div class="list-item todo-item sched-row' + (isDone ? ' li-done' : '') + '">' +
+        '<input type="checkbox"' + (isDone ? ' checked' : '') + ' aria-label="done">' +
+        '<span class="li-main"><span class="li-title">' + UI.esc(showT) +
+        ' <span class="td-pdot td-b-gold" title="Very high"></span></span>' +
+        '<span class="li-sub">📅 ' + range + '</span></span></div>');
+      row.querySelector('input').addEventListener('change', function (e2) {
+        var want = e2.target.checked;
+        e2.target.disabled = true;
+        Sync.schedSetDone(ev.id, want).then(function () {
+          ev.title = want ? ('✓ ' + showT) : showT;
+          var v2 = { items: items, syncedAt: (cache && cache.syncedAt) || 0, error: null };
+          DB.put('meta', { key: 'schedList', value: v2, updatedAt: Date.now() });
+          drawSched(box, v2);
+          UI.toast(want ? '✓ marked in the calendar' : 'Unmarked in the calendar');
+        }).catch(function (err) {
+          e2.target.checked = !want;
+          e2.target.disabled = false;
+          UI.toast('Calendar: ' + String((err && err.message) || err).slice(0, 90));
+        });
+      });
+      row.addEventListener('click', function (e3) {
+        if (e3.target.tagName === 'INPUT') return;
+        UI.toast('Edit/add/remove in AwesomeCalendar — this list is view + ✓ only');
+      });
+      zone.appendChild(row);
+    });
+    box.appendChild(zone);
+  }
+  function renderSched(host) {
+    var box = UI.el('<div class="sched-box"></div>');
+    _schedBox = box;
+    host.appendChild(box);
+    DB.get('meta', 'schedList').then(function (r) {
+      var cache = (r && r.value) || null;
+      drawSched(box, cache);
+      var age = cache ? Date.now() - (cache.syncedAt || 0) : Infinity;
+      if (age > 3600000 && window.Sync && Sync.schedList) {
+        Sync.schedList().then(function (items) {
+          var val = { items: items, syncedAt: Date.now(), error: null };
+          return DB.put('meta', { key: 'schedList', value: val, updatedAt: Date.now() }).then(function () {
+            if (box === _schedBox) drawSched(box, val);
+          });
+        }).catch(function (e) {
+          var val = { items: (cache && cache.items) || [], syncedAt: Date.now() - 3000000,
+                      error: String((e && e.message) || e).slice(0, 120) };
+          DB.put('meta', { key: 'schedList', value: val, updatedAt: Date.now() });
+          if (box === _schedBox) drawSched(box, val);
+        });
+      }
+    });
+  }
+
   function renderTodo(el) {
     var hdr = UI.header({
       title: 'Alef.do', back: '#/discipline',
@@ -488,6 +572,8 @@ Screens.discipline = (function () {
             zone.appendChild(gr);
           });
           wrap.appendChild(zone);
+          /* v0.53: Schedules (work calendar) sits right after PROJECT */
+          if (c.id === 'project') renderSched(wrap);
         });
       });
     }

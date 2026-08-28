@@ -63,6 +63,17 @@ Screens.setup = (function () {
     c1.appendChild(b1); c1.appendChild(f1); c1.appendChild(s1);
     pad.appendChild(c1);
 
+    /* ---- v0.53: REAL full restore — Full backup + Vault in one go ---- */
+    var cR = UI.el('<div class="card"></div>');
+    var bR = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Full restore — 2 files (backup + Vault)</button>');
+    bR.addEventListener('click', function () {
+      if (!window.RestoreFlow) { UI.toast('Restore module not loaded'); return; }
+      RestoreFlow.open(function () { paintStep1(); });
+    });
+    cR.appendChild(bR);
+    cR.appendChild(UI.el('<div class="sub" style="margin-top:6px">Brings EVERYTHING back at once: pick the Full backup file and the Vault file — each panel shows the file\'s date so you can check you grabbed the right ones. Cancel backs out any time.</div>'));
+    pad.appendChild(cR);
+
     /* ---- step 2 · Google sign-in ---- */
     var c2 = UI.el('<div class="card"></div>');
     var b2 = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' 2 · Connect Google (sign-in)</button>');

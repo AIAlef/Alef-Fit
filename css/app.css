@@ -882,6 +882,31 @@ html[data-msize="l"] .media-stage .crop-box { --stage-max: 440px; }
 .td-b-blue { background: #3b76d9; }
 .td-b-yellow { background: #e8c93e; }
 .td-b-purple { background: #8e5bd8; }
+/* v0.53: METAL priority ramp — Bronze (Medium) → Silver (High) → Gold
+   (Very high, unchanged) → Platinum/diamond (Highest, unchanged). */
+.td-b-bronze { background: linear-gradient(135deg, #eab68e, #b26a3d 55%, #7d4423); }
+.td-b-silver { background: linear-gradient(135deg, #f4f6f8, #bcc5ce 55%, #8b97a3); }
+/* Habit 🌱 = very-very-high: platinum-class shine with a green cast; the
+   sprout glyph renders inside the badge (v0.50). */
+.td-b-habit {
+  background: linear-gradient(135deg, #eafff2 0%, #a9e7c5 30%, #e9fff2 50%, #7fd8a8 72%, #ddffe9 100%);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .78rem; line-height: 1;
+}
+
+/* v0.53: two-file restore panels (RestoreFlow) */
+.rw-panel {
+  border: 1.5px dashed var(--line); border-radius: var(--r-md);
+  padding: 10px 12px; margin: 8px 0; cursor: pointer;
+}
+.rw-panel .rw-head { font-weight: 700; margin-bottom: 4px; }
+.rw-panel.rw-ok { border-style: solid; border-color: #4fb06d; }
+.rw-panel.rw-bad { border-style: solid; border-color: var(--danger); }
+
+/* v0.53: Schedules (work calendar) section */
+.sched-title { margin-top: 10px; }
+.sched-row .li-sub { font-size: .72rem; }
+.sched-hint { margin: 2px 2px 8px; }
 .td-b-diamond { background: linear-gradient(135deg, #eaf5ff 0%, #a8d4ff 30%, #e6f0ff 50%, #7fb8f0 72%, #dcefff 100%); overflow: hidden; }
 .td-b-diamond::after {
   content: ''; position: absolute; top: -40%; left: -80%; width: 55%; height: 180%;

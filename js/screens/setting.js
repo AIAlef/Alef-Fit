@@ -159,22 +159,63 @@ Screens.setting = (function () {
     /* 4 — everything incl. media. v0.49: the LOCAL full backup now carries
        the Vault too (cloud sync files still never do). */
     var bk4 = bkBtn('4 · Full backup (all data + Vault)', true);
+    /* v0.53: save details live UNDER the button, not in popups/toasts —
+       persistent "current backup" status + live progress while writing */
+    var bk4Status = UI.el('<div class="sub bk4-status" style="margin:2px 0 8px"></div>');
+    function fmtBk4(info) {
+      if (!info) return 'No full backup made on this device yet.';
+      if (!info.ok) {
+        return '⚠ Last attempt ' + new Date(info.at).toLocaleString() + ' FAILED — ' +
+          (info.error || 'unknown error');
+      }
+      return '✓ Current backup: ' + new Date(info.at).toLocaleString() + ' · ' + info.mb + ' MB · ' +
+        (info.path || 'downloaded to this browser');
+    }
+    DB.get('meta', 'fullBackupInfo').then(function (r) {
+      bk4Status.textContent = fmtBk4(r && r.value);
+    });
     bk4.addEventListener('click', function () {
+      bk4Status.textContent = 'Preparing backup…';
       DB.exportAll({ media: 'all', vault: true }).then(function (data) {
-        UI.download('alef-fit-4-full-backup-' + DB.todayISO() + '.json', JSON.stringify(data));
-        /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
-           Vault .AFdd — serial bumps and the 30-day timer resets */
-        if ((DB.getSettings().deviceId || '') !== 'PC' && window.VaultKeep) {
-          DB.all('todos').then(function (rows) {
-            if (!rows.some(function (r) { return r.cat === 'vault'; })) return;
-            VaultKeep.backupNow().then(function (r) {
-              UI.toast('Vault .AFdd #' + VaultKeep.fmtSerial(r.serial) + ' written too');
-            }).catch(function () { /* full backup itself already succeeded */ });
-          });
+        var text = JSON.stringify(data);
+        var mb = (text.length / 1048576).toFixed(1);
+        var fname = 'alef-fit-4-full-backup-' + DB.todayISO() + '.json';
+        function finish(ok, path, error) {
+          var info = { at: Date.now(), ok: ok, mb: mb, path: path || null, error: error || null };
+          DB.put('meta', { key: 'fullBackupInfo', value: info, updatedAt: Date.now() });
+          bk4Status.textContent = fmtBk4(info);
+          if (!ok) return;
+          /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
+             Vault .AFdd — serial bumps and the 30-day timer resets */
+          if ((DB.getSettings().deviceId || '') !== 'PC' && window.VaultKeep) {
+            DB.all('todos').then(function (rows) {
+              if (!rows.some(function (r) { return r.cat === 'vault'; })) return;
+              VaultKeep.backupNow().then(function (r) {
+                UI.toast('Vault .AFdd #' + VaultKeep.fmtSerial(r.serial) + ' written too');
+              }).catch(function () { /* full backup itself already succeeded */ });
+            });
+          }
         }
+        if (window.Native && Native.isNative && Native.isNative() &&
+            Native.canSaveFiles && Native.canSaveFiles()) {
+          /* v0.53 BUGFIX: big backups stream in chunks (Native.saveText) —
+             one-shot writes failed for multi-MB files on the S26 */
+          Native.saveText(fname, text, function (done, total) {
+            bk4Status.textContent = 'Saving… ' + Math.round(done / total * 100) + '% of ' + mb + ' MB';
+          }).then(function (path) {
+            if (path) finish(true, path);
+            else finish(false, null, (Native.lastSaveError && Native.lastSaveError()) || 'could not write the file');
+          });
+        } else {
+          UI.download(fname, text);
+          finish(true, null);
+        }
+      }).catch(function (err) {
+        bk4Status.textContent = '⚠ Backup failed — ' + String((err && err.message) || err);
       });
     });
     bk.appendChild(bk4);
+    bk.appendChild(bk4Status);
     /* device transfer (advanced): small PC <-> phone merge file */
     bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 8px">Device transfer (advanced): sync file = all data + only media added since the last export — for manual PC ↔ phone moves.</div>'));
     var expSyncBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
@@ -274,6 +315,12 @@ Screens.setting = (function () {
     });
     bk.appendChild(impBtn);
     bk.appendChild(impFile);
+    /* v0.53: real full restore for a NEW phone — both files in one go */
+    var impBothBtn = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('upload') + ' Import to new phone (Full + Vault)</button>');
+    impBothBtn.addEventListener('click', function () {
+      RestoreFlow.open(function () { App.route(); });
+    });
+    bk.appendChild(impBothBtn);
     var undoBtn = UI.el('<button class="btn btn-block" style="margin-top:8px;display:none">Undo last sync/merge</button>');
     DB.undoInfo().then(function (u) {
       if (u) {
@@ -582,14 +629,15 @@ Screens.setting = (function () {
       });
       infList.appendChild(row);
     }
-    infoEntry('How to Sync', 'Backup & sync — files, merge, daily routine',
-      '<div class="sub" style="margin-bottom:6px"><b>Daily:</b> tap <b>Sync now</b> after training — the other device syncs when you open it.</div>' +
-      '<table class="info-table"><tr><th>File</th><th>Contains</th><th>Use for</th></tr>' +
-      '<tr><td>Sync file</td><td>all data + only NEW media</td><td>moving changes (PC file window, offline)</td></tr>' +
-      '<tr><td>Full backup</td><td>all data + ALL media</td><td>safety copy / restore</td></tr></table>' +
-      '<div class="sub" style="margin:6px 0"><b>Import → Merge:</b> combines both sides, newest change wins, deletions carry over (never loses data).<br>' +
-      '<b>Import → Replace all:</b> wipes this device first — recovery only.</div>' +
-      '<div class="sub"><b>Routine:</b> 1) after training → Sync now · 2) every few weeks → Export full backup (keep in Drive) · 3) PC file window → Export sync file → Import/Merge here · 4) new or broken device → full backup → Replace all.</div>');
+    infoEntry('Backup guide', 'Which file, when — by situation',
+      /* v0.53: rewritten per Alef — concise, one line per real situation */
+      '<table class="info-table"><tr><th>Situation</th><th>What to do</th></tr>' +
+      '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>Full restore — 2 files</b>: pick the Full backup (.json) + the Vault (.AFdd). Then Connect Google → Full Sync → claim S26.</td></tr>' +
+      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>4 · Full backup</b> — the status line under the button shows the current backup; the dated Vault .AFdd writes itself too.</td></tr>' +
+      '<tr><td><b>Secure the Vault</b></td><td>The rolling mirror (A-FiT-DD-current) updates by itself. Monthly: Vault 🔒 → <b>Backup now</b> → copy the dated .AFdd to USB. The Vault NEVER rides the cloud.</td></tr>' +
+      '<tr><td><b>Device transfer</b><br>(PC ↔ phone)</td><td>Export <b>sync file</b> (small — only new media) → Import → <b>Merge</b> on the other device. Daily changes travel by <b>Sync now</b> instead.</td></tr></table>' +
+      '<div class="sub" style="margin:6px 0"><b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.<br>' +
+      'Files live in <b>Documents › S26-Alef-Fit</b> (phone) or Downloads (browser).</div>');
     infoEntry('Edit app text', 'Rename any label — then make it permanent',
       '<div class="sub"><b>1.</b> Setting → Developer → switch on <b>Text edit mode</b>.<br>' +
       '<b>2.</b> Tap any app text (title, button, label, grey placeholder) → type the new wording → Save. It applies instantly and syncs to the other device.<br>' +
@@ -798,4 +846,101 @@ Screens.setting = (function () {
   }
 
   return { render: render };
+})();
+
+/* ==== v0.53: RestoreFlow — REAL full import for a new S26 ====
+   One dialog, TWO clearly-labeled file panels (Full backup + Vault
+   backup), each showing the chosen file's name and date/time. Cancel or
+   the ✕ backs out at any point; Import runs both restores in order.
+   Used from Setting → Backup and from the first-run Setup wizard. */
+'use strict';
+
+window.RestoreFlow = (function () {
+
+  function panel(no, title, hint) {
+    return UI.el('<div class="rw-panel">' +
+      '<div class="rw-head">' + no + ' · ' + title + '</div>' +
+      '<div class="rw-file sub">' + hint + '</div>' +
+      '<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">' +
+      '</div>');
+  }
+
+  function fmtWhen(json, file) {
+    var iso = (json && (json.exportedAt || json.at)) || null;
+    var d = iso ? new Date(iso) : (file && file.lastModified ? new Date(file.lastModified) : null);
+    return d ? d.toLocaleString() : '(no date)';
+  }
+
+  function open(onDone) {
+    var picked = { full: null, vault: null };
+    var body = UI.el('<div><p class="sub">Restore a new phone in ONE go — select BOTH files, then Import. ' +
+      'The files live in <b>Documents › S26-Alef-Fit</b> (or Downloads / your USB copy).</p></div>');
+    var pFull = panel('1', 'Full backup', 'Tap to choose… (alef-fit-4-full-backup-YYYY-MM-DD.json)');
+    var pVault = panel('2', 'Vault backup', 'Tap to choose… (A-FiT-DD-….AFdd or vault .json)');
+    body.appendChild(pFull);
+    body.appendChild(pVault);
+    body.appendChild(UI.el('<p class="sub" style="margin-top:6px">Have only one of the files? Use the normal ' +
+      '"Import backup file" button instead — this flow needs both.</p>'));
+
+    function wire(p, key, wantFull) {
+      var inp = p.querySelector('input');
+      var lbl = p.querySelector('.rw-file');
+      p.addEventListener('click', function (e) {
+        if (e.target !== inp) inp.click();
+      });
+      inp.addEventListener('change', function (e) {
+        var f = e.target.files[0];
+        if (!f) return;
+        var fr = new FileReader();
+        fr.onload = function () {
+          VaultKeep.parseBackup(fr.result).catch(function () { return null; }).then(function (json) {
+            var isVault = !!(json && json.kind === 'vault-backup');
+            var isFull = !!(json && json.app === 'alef.fit' && json.stores);
+            if (!json || (wantFull && !isFull) || (!wantFull && !isVault)) {
+              picked[key] = null;
+              p.classList.remove('rw-ok');
+              p.classList.add('rw-bad');
+              lbl.innerHTML = '⚠ "' + UI.esc(f.name) + '" is not a ' + (wantFull ? 'Full backup' : 'Vault backup') + ' file — choose again';
+              return;
+            }
+            picked[key] = { json: json, name: f.name };
+            p.classList.remove('rw-bad');
+            p.classList.add('rw-ok');
+            lbl.innerHTML = '✓ <b>' + UI.esc(f.name) + '</b><br>' + UI.esc(fmtWhen(json, f)) +
+              (wantFull ? '' : ' · ' + ((json.vault || []).length) + ' entries');
+          });
+        };
+        fr.readAsArrayBuffer(f);
+        e.target.value = '';
+      });
+    }
+    wire(pFull, 'full', true);
+    wire(pVault, 'vault', false);
+
+    UI.modal('Import to new phone', body, [
+      { label: 'Cancel' },
+      {
+        label: 'Import both', primary: true, onClick: function (close) {
+          if (!picked.full || !picked.vault) {
+            UI.toast('Select BOTH files first (or Cancel)');
+            return;
+          }
+          close();
+          UI.toast('Restoring full backup…');
+          DB.importAll(picked.full.json, { mode: 'merge' }).then(function (c) {
+            UI.toast('Data restored: +' + c.added + ' new, ' + c.updated + ' updated');
+            return DB.importVault(picked.vault.json);
+          }).then(function (v) {
+            App.applySettings();
+            UI.toast('Vault restored: +' + v.added + ' entries ✓ — restore complete');
+            if (onDone) onDone();
+          }).catch(function (err) {
+            UI.toast(String((err && err.message) || err));
+          });
+        }
+      }
+    ]);
+  }
+
+  return { open: open };
 })();
