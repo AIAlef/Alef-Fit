@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.51.0';
+var APP_VERSION = '0.52.0';
 
 var App = (function () {
 
@@ -166,6 +166,9 @@ var App = (function () {
           Native.init();   // APK: schedule real background alarms
         }
         if (window.Sync && Sync.autoInit) Sync.autoInit();
+        /* v0.52: if the app closed before the 10 s mirror debounce fired,
+           bring the Vault retention copy back up to date */
+        if (window.VaultKeep) setTimeout(function () { VaultKeep.catchUp(); }, 6000);
         setInterval(tickAlerts, 20000);
         setTimeout(function () { DB.gcMedia(); }, 4000);
         if (window.matchMedia) {

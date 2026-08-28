@@ -492,42 +492,139 @@ Screens.discipline = (function () {
       });
     }
 
-    /* Vault menu: what it is + the only backup path (a local file) */
+    /* Vault safekeeping cockpit (v0.52, docs/VAULT-SAFEKEEP-PLAN.md):
+       info block, ONE-TAP dated .AFdd backup with guided USB step,
+       .AFdd/.zip/.json import (full filename shown), backup history. */
+    function vkDate(ms, withTime) {
+      if (!ms) return '—';
+      var d = new Date(ms);
+      var out = String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
+      if (withTime !== false) out += ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      return out;
+    }
+    function vaultBackupDone(r) {
+      var onPhone = r.where && r.where !== 'download';
+      var body = UI.el('<div><p>Backup <b>#' + VaultKeep.fmtSerial(r.serial) + '</b> written:</p>' +
+        '<p class="vk-file">' + UI.esc(r.filename) + '</p>' +
+        '<p class="sub">' + (onPhone
+          ? 'It is in <b>Documents › S26-Alef-Fit</b> on this phone.'
+          : 'It is in your <b>Downloads</b> folder.') +
+        '<br><br><b>USB copy (last step):</b> open <b>My Files</b> → ' +
+        (onPhone ? 'Documents › S26-Alef-Fit' : 'Downloads') +
+        ' → long-press the file → Copy → paste on your USB-C drive. ' +
+        'Then confirm below so the history shows USB ✓.</p></div>');
+      var btns = [
+        { label: 'Later' },
+        {
+          label: 'Copied to USB ✓', primary: true, onClick: function (close) {
+            VaultKeep.markUsb(r.serial).then(function () { UI.toast('USB copy recorded ✓'); close(); });
+          }
+        }
+      ];
+      /* system share sheet when this WebView offers file sharing */
+      if (navigator.canShare && r.bytes) {
+        try {
+          var shf = new File([r.bytes], r.filename, { type: 'application/zip' });
+          if (navigator.canShare({ files: [shf] })) {
+            btns.splice(1, 0, {
+              label: 'Share…', onClick: function () {
+                navigator.share({ files: [shf] }).catch(function () { /* user closed it */ });
+              }
+            });
+          }
+        } catch (e) { /* no file sharing here */ }
+      }
+      UI.modal('Vault backup done', body, btns);
+    }
     function vaultMenu() {
-      var body = UI.el('<div><div class="sub" style="margin-bottom:10px">🔒 <b>Vault</b> is a private list that lives on this S26 only (it does not appear on the PC): never synced to Google Drive, never in transfer/sync files, never shared with Claude, and skipped by Moment. It IS included in the local Full backup (tier 4) since v0.49 — that file stays on your device. Back it up yourself below — the file lands in Downloads, copy it to a USB drive for safekeeping. Import adds every entry back as a <b>new, date-stamped copy</b> — nothing merges or overwrites, so you review and tidy by hand.</div></div>');
-      var exp = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export Vault backup</button>');
-      exp.addEventListener('click', function () {
-        DB.exportVault().then(function (data) {
-          UI.download('alef-fit-2-vault-' + DB.todayISO() + '.json', JSON.stringify(data));
-          UI.toast('Vault backup exported (' + data.vault.length + ' entr' + (data.vault.length === 1 ? 'y' : 'ies') + ') — in Downloads');
+      VaultKeep.info().then(function (vi) {
+        var dueTxt = 'no backup yet — do the first one below';
+        if (vi.backupAt) {
+          var days = Math.ceil((vi.dueAt - Date.now()) / 86400000);
+          dueTxt = days > 0 ? 'in ' + days + ' day' + (days === 1 ? '' : 's') : '⚠ DUE NOW';
+        }
+        var body = UI.el('<div>' +
+          '<div class="card vk-info">' +
+          '<div><span>Entries</span><b>' + vi.entries + '</b></div>' +
+          '<div><span>Last change</span><b>' + vkDate(vi.changeAt) + '</b></div>' +
+          '<div><span>Retention copy</span><b>' + (vi.canMirror
+            ? (vi.mirrorAt ? '✓ ' + vkDate(vi.mirrorAt) : '⚠ not written yet')
+            : '— (runs on the APK)') + '</b></div>' +
+          '<div><span>Last backup</span><b>' + (vi.serial
+            ? '#' + VaultKeep.fmtSerial(vi.serial) + ' · ' + vkDate(vi.backupAt, false)
+            : '—') + '</b></div>' +
+          '<div><span>Next backup due</span><b>' + dueTxt + '</b></div>' +
+          '</div>' +
+          '<div class="sub" style="margin-bottom:8px">🔒 The Vault lives on this S26 only — never in the cloud. ' +
+          'One tap below writes a disguised <b>.AFdd</b> backup (really a zip — rename to .zip to open anywhere). ' +
+          'The rolling copy <b>' + VaultKeep.CURRENT_NAME + '</b> in Documents › S26-Alef-Fit rewrites itself ~10 s after every change and survives app updates.</div></div>');
+        /* one-stop backup */
+        var bk = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Back up now (.AFdd)</button>');
+        bk.addEventListener('click', function () {
+          if (!vi.entries) { UI.toast('Vault is empty — nothing to back up'); return; }
+          bk.disabled = true;
+          VaultKeep.backupNow().then(function (r) {
+            bk.disabled = false;
+            vaultBackupDone(r);
+          }).catch(function (e) {
+            bk.disabled = false;
+            UI.toast(String(e && e.message || e));
+          });
         });
+        body.appendChild(bk);
+        /* import: .AFdd / .zip / legacy .json — full filename shown first */
+        var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup (.AFdd / .zip / .json)</button>');
+        var impFile = UI.el('<input type="file" accept=".AFdd,.zip,.json,application/json,application/zip,application/octet-stream" class="hidden">');
+        impBtn.addEventListener('click', function () { impFile.click(); });
+        impFile.addEventListener('change', function (e) {
+          var f = e.target.files[0];
+          e.target.value = '';
+          if (!f) return;
+          var fr = new FileReader();
+          fr.onload = function () {
+            VaultKeep.parseBackup(fr.result).then(function (json) {
+              if (!json || json.kind !== 'vault-backup') { UI.toast('Not a Vault backup file'); return; }
+              var b2 = UI.el('<div><p>Import this Vault backup?</p>' +
+                '<p class="vk-file">' + UI.esc(f.name) + '</p>' +
+                '<p class="sub">' + (json.vault || []).length + ' entries · exported ' + UI.esc((json.exportedAt || '?').slice(0, 10)) +
+                (json.serial ? ' · #' + VaultKeep.fmtSerial(json.serial) : '') +
+                '<br>Each entry is added as a NEW date-stamped copy — nothing merges or overwrites.</p></div>');
+              UI.modal('Import Vault backup', b2, [
+                { label: 'Cancel' },
+                {
+                  label: 'Import', primary: true, onClick: function (close) {
+                    close();
+                    DB.importVault(json).then(function (c) {
+                      UI.toast('Vault: +' + c.added + ' entr' + (c.added === 1 ? 'y' : 'ies') + ' stamped (' + c.stamp + ') — review and tidy by hand');
+                      draw();
+                    }).catch(function (err) { UI.toast(String(err.message || err)); });
+                  }
+                }
+              ]);
+            }).catch(function (err) { UI.toast(String(err.message || err)); });
+          };
+          fr.readAsArrayBuffer(f);
+        });
+        body.appendChild(impBtn);
+        body.appendChild(impFile);
+        /* v0.48: text export — pick entries, copy or save .txt (local only) */
+        var expTxt = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('export') + ' Export Vault as text</button>');
+        expTxt.addEventListener('click', exportVaultText);
+        body.appendChild(expTxt);
+        /* backup history */
+        if (vi.log.length) {
+          body.appendChild(UI.el('<div class="td-subs-head" style="margin-top:10px">BACKUP HISTORY</div>'));
+          var hl = UI.el('<div class="list"></div>');
+          vi.log.slice(0, 12).forEach(function (en) {
+            hl.appendChild(UI.el('<div class="list-item"><span class="li-main">' +
+              '<span class="li-title">#' + VaultKeep.fmtSerial(en.serial) + (en.usb ? ' · USB ✓' : '') + '</span>' +
+              '<span class="li-sub vk-file">' + UI.esc(en.file) + '</span></span>' +
+              '<span class="li-sub">' + vkDate(en.at, false) + '</span></div>'));
+          });
+          body.appendChild(hl);
+        }
+        UI.modal('Vault 🔒', body, [{ label: 'Close', primary: true }]);
       });
-      body.appendChild(exp);
-      var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import Vault backup</button>');
-      var impFile = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
-      impBtn.addEventListener('click', function () { impFile.click(); });
-      impFile.addEventListener('change', function (e) {
-        var f = e.target.files[0];
-        if (!f) return;
-        var fr = new FileReader();
-        fr.onload = function () {
-          var json;
-          try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid Vault backup'); return; }
-          DB.importVault(json).then(function (c) {
-            UI.toast('Vault: +' + c.added + ' new entr' + (c.added === 1 ? 'y' : 'ies') + ' stamped (' + c.stamp + ') — review and tidy by hand');
-            draw();
-          }).catch(function (err) { UI.toast(String(err.message || err)); });
-        };
-        fr.readAsText(f);
-        e.target.value = '';
-      });
-      body.appendChild(impBtn);
-      body.appendChild(impFile);
-      /* v0.48: text export — pick entries, copy or save .txt (local only) */
-      var expTxt = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('export') + ' Export Vault as text</button>');
-      expTxt.addEventListener('click', exportVaultText);
-      body.appendChild(expTxt);
-      UI.modal('Vault 🔒', body, [{ label: 'Close', primary: true }]);
     }
 
     /* drop: change list and/or position; reindexes the target list */

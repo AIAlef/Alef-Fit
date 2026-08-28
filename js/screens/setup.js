@@ -24,7 +24,7 @@ Screens.setup = (function () {
     /* ---- step 1 · import sync info (highlighted) ---- */
     var c1 = UI.el('<div class="card"></div>');
     var b1 = UI.el('<button class="btn btn-primary btn-block su-glow">' + UI.icon('upload') + ' 1 · Import sync info</button>');
-    var f1 = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
+    var f1 = UI.el('<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">');
     var s1 = UI.el('<div class="sub" style="margin-top:6px"></div>');
     function paintStep1() {
       var s = DB.getSettings() || {};
@@ -37,8 +37,8 @@ Screens.setup = (function () {
       if (!f) return;
       var fr = new FileReader();
       fr.onload = function () {
-        var json;
-        try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid backup file'); return; }
+        /* v0.52: also reads the disguised .AFdd/.zip Vault files */
+        window.VaultKeep.parseBackup(fr.result).then(function (json) {
         var done = function (msg) { UI.toast(msg); paintStep1(); };
         if (json && json.kind === 'syncinfo-backup') {
           DB.importSyncInfo(json).then(function (n) { done('Sync settings restored (' + n + ' values)'); })
@@ -54,8 +54,9 @@ Screens.setup = (function () {
             done('Backup merged: +' + c.added + ' / ~' + c.updated);
           }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
         }
+        }).catch(function (err) { UI.toast(String(err.message || err)); });
       };
-      fr.readAsText(f);
+      fr.readAsArrayBuffer(f);
       e.target.value = '';
     });
     paintStep1();
@@ -144,20 +145,19 @@ Screens.setup = (function () {
 
     /* ---- optional (S26): Vault backup + done ---- */
     var vaultCard = UI.el('<div class="card hidden"></div>');
-    var bV = UI.el('<button class="btn btn-block" style="margin-bottom:6px">' + UI.icon('upload') + ' Import Vault backup (optional)</button>');
-    var fV = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
+    var bV = UI.el('<button class="btn btn-block" style="margin-bottom:6px">' + UI.icon('upload') + ' Import Vault backup (optional, .AFdd / .zip / .json)</button>');
+    var fV = UI.el('<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">');
     bV.addEventListener('click', function () { fV.click(); });
     fV.addEventListener('change', function (e) {
       var f = e.target.files[0];
       if (!f) return;
       var fr = new FileReader();
       fr.onload = function () {
-        var json;
-        try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid file'); return; }
-        DB.importVault(json).then(function (c) { UI.toast('Vault restored: +' + c.added + ' entries'); })
-          .catch(function (err2) { UI.toast(String(err2.message || err2)); });
+        window.VaultKeep.parseBackup(fr.result).then(function (json) {
+          return DB.importVault(json).then(function (c) { UI.toast('Vault restored: +' + c.added + ' entries'); });
+        }).catch(function (err2) { UI.toast(String(err2.message || err2)); });
       };
-      fr.readAsText(f);
+      fr.readAsArrayBuffer(f);
       e.target.value = '';
     });
     vaultCard.appendChild(UI.el('<div class="sub" style="margin-bottom:6px">The Vault never rides the cloud — restore it from its own file if you have one.</div>'));

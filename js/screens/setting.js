@@ -137,13 +137,14 @@ Screens.setting = (function () {
       });
     });
     bk.appendChild(bk1);
-    /* 2 — Vault only (S26 only: the sole way Vault leaves the device) */
+    /* 2 — Vault backup (S26 only). v0.52: goes through VaultKeep — the
+       dated .AFdd, serial bump, history entry, 30-day timer reset. */
     if ((s.deviceId || '') !== 'PC') {
-      var bk2 = bkBtn('2 · Vault only');
+      var bk2 = bkBtn('2 · Vault backup (.AFdd)');
       bk2.addEventListener('click', function () {
-        DB.exportVault().then(function (data) {
-          UI.download('alef-fit-2-vault-' + DB.todayISO() + '.json', JSON.stringify(data));
-        });
+        VaultKeep.backupNow().then(function (r) {
+          UI.toast('Vault backup #' + VaultKeep.fmtSerial(r.serial) + ' — ' + r.filename);
+        }).catch(function (e2) { UI.toast(String(e2 && e2.message || e2)); });
       });
       bk.appendChild(bk2);
     }
@@ -161,6 +162,16 @@ Screens.setting = (function () {
     bk4.addEventListener('click', function () {
       DB.exportAll({ media: 'all', vault: true }).then(function (data) {
         UI.download('alef-fit-4-full-backup-' + DB.todayISO() + '.json', JSON.stringify(data));
+        /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
+           Vault .AFdd — serial bumps and the 30-day timer resets */
+        if ((DB.getSettings().deviceId || '') !== 'PC' && window.VaultKeep) {
+          DB.all('todos').then(function (rows) {
+            if (!rows.some(function (r) { return r.cat === 'vault'; })) return;
+            VaultKeep.backupNow().then(function (r) {
+              UI.toast('Vault .AFdd #' + VaultKeep.fmtSerial(r.serial) + ' written too');
+            }).catch(function () { /* full backup itself already succeeded */ });
+          });
+        }
       });
     });
     bk.appendChild(bk4);
@@ -177,24 +188,27 @@ Screens.setting = (function () {
     bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 6px">Import: pick the backup file from ' +
       (canFs ? '<b>S26 › Documents › S26-Alef-Fit</b>' : 'your Downloads folder') + '.</div>'));
     var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup file</button>');
-    var impFile = UI.el('<input type="file" accept=".json,application/json" class="hidden">');
+    var impFile = UI.el('<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">');
     impBtn.addEventListener('click', function () { impFile.click(); });
     impFile.addEventListener('change', function (e) {
       var f = e.target.files[0];
       if (!f) return;
+      var fname = f.name || '(file)';
       var fr = new FileReader();
       fr.onload = function () {
-        var json;
-        try { json = JSON.parse(fr.result); } catch (err) { UI.toast('Not a valid backup file'); return; }
         /* v0.32: one import button — route by the file's own type stamp.
            v0.49: every type gets a confirm dialog with a Cancel button
-           BEFORE anything is written. */
+           BEFORE anything is written.
+           v0.52: also reads .AFdd/.zip (VaultKeep) and every confirm shows
+           the FULL filename with its extension. */
         function confirmImport(what, run) {
-          UI.modal('Import backup', UI.el('<div><p>' + what + '</p></div>'), [
+          UI.modal('Import backup', UI.el('<div><p class="vk-file">' + UI.esc(fname) + '</p><p>' + what + '</p></div>'), [
             { label: 'Cancel' },
             { label: 'Import', primary: true, onClick: function (close) { close(); run(); } }
           ]);
         }
+        VaultKeep.parseBackup(fr.result).catch(function () { return null; }).then(function (json) {
+        if (!json) { UI.toast('Not a valid backup file'); return; }
         if (json && json.kind === 'syncinfo-backup') {
           confirmImport('Google Drive <b>sync settings</b> file. Restore the connection settings on this device?', function () {
             DB.importSyncInfo(json).then(function (n) {
@@ -223,7 +237,7 @@ Screens.setting = (function () {
           return;
         }
         var when = (json.exportedAt || '?').slice(0, 10);
-        var body = UI.el('<div><p>File from <b>' + UI.esc(when) + '</b>. How should it be applied?</p>' +
+        var body = UI.el('<div><p class="vk-file">' + UI.esc(fname) + '</p><p>File from <b>' + UI.esc(when) + '</b>. How should it be applied?</p>' +
           '<p class="sub"><b>Merge</b> (recommended): combines both sides — newest change per record wins, deletions carry over.<br><b>Replace</b>: wipes this device first, then loads the file.</p></div>');
         UI.modal('Import backup', body, [
           { label: 'Cancel' },
@@ -253,8 +267,9 @@ Screens.setting = (function () {
             }
           }
         ]);
+        });
       };
-      fr.readAsText(f);
+      fr.readAsArrayBuffer(f);
       e.target.value = '';
     });
     bk.appendChild(impBtn);

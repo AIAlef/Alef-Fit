@@ -279,7 +279,11 @@ var DB = (function () {
         pre = delRaw('tombstones', 'todos|' + obj.id);
       }
       if (touch && window.Sync && window.Sync.autoTouch) window.Sync.autoTouch();
-      return pre.then(function () { return putRaw('todos', obj); });
+      return pre.then(function () { return putRaw('todos', obj); }).then(function (r) {
+        /* v0.52: Vault content changed → stamp + schedule the mirror */
+        if (isVault || (old && old.cat === 'vault')) vaultChanged();
+        return r;
+      });
     });
   }
   function get(store, key) { return reqP(tx(store).get(key)); }
@@ -288,7 +292,9 @@ var DB = (function () {
     var pre = store === 'todos' ? get('todos', key) : Promise.resolve(null);
     return pre.then(function (rec) {
       /* vault tasks: local-only — no proposal, no tombstone, no sync trace */
-      if (rec && rec.cat === 'vault') return delRaw(store, key);
+      if (rec && rec.cat === 'vault') {
+        return delRaw(store, key).then(function (r) { vaultChanged(); return r; });
+      }
       if (GOVERNED[store] && proposalMode()) return stageProposal(store, 'delete', null, key);
       if (DATA_STORES.indexOf(store) >= 0) {
         var tb = { id: store + '|' + key, store: store, recId: key, deletedAt: Date.now() };
@@ -694,7 +700,15 @@ var DB = (function () {
     DATA_STORES.concat(['meta', 'tombstones']).forEach(function (s) {
       chain = chain.then(function () { return all(s); }).then(function (rows) {
         if (s === 'todos' && !withVault) rows = rows.filter(function (r) { return r.cat !== 'vault'; }); /* Vault stays local unless the LOCAL full backup asks */
-        if (s === 'meta') rows = rows.filter(function (r) { return r.key !== 'gdriveRefreshToken' && r.key !== 'undoSnapshot'; });
+        if (s === 'meta') {
+          rows = rows.filter(function (r) {
+            if (r.key === 'gdriveRefreshToken' || r.key === 'undoSnapshot') return false;
+            /* v0.52: vault* stamps (serial, backup log w/ filenames) stay
+               off the cloud too — only the LOCAL full backup carries them */
+            if (!withVault && r.key.indexOf('vault') === 0) return false;
+            return true;
+          });
+        }
         if (s === 'proposals') rows = rows.filter(function (r) { return r.status !== 'draft'; });
         out.stores[s] = rows;
       });
@@ -785,11 +799,17 @@ var DB = (function () {
     var keepScale = _settings ? _settings.textScale : null;
     var keepSize = _settings ? _settings.mediaSize : 'm';
     var vaultKeep = [];
+    var vaultMetaKeep = [];
     /* Carry the local Vault across the wipe. A v0.49+ full backup may add
        its own vault rows too — on an id collision the LOCAL copy wins
-       (vaultKeep is written last), everything else lands additively. */
+       (vaultKeep is written last), everything else lands additively.
+       v0.52: the vault* meta stamps (serial counter, backup log) survive
+       the wipe the same way. */
     var chain = all('todos').then(function (rows) {
       vaultKeep = rows.filter(function (r) { return r.cat === 'vault'; });
+      return all('meta');
+    }).then(function (mrows) {
+      vaultMetaKeep = mrows.filter(function (r) { return String(r.key).indexOf('vault') === 0; });
     });
     DATA_STORES.concat(['meta', 'tombstones']).forEach(function (s) {
       chain = chain.then(function () { return clear(s); }).then(function () {
@@ -803,6 +823,8 @@ var DB = (function () {
       return Promise.all((json.stores.media || []).map(function (m) { return putRaw('media', m); }));
     }).then(function () {
       return Promise.all(vaultKeep.map(function (r) { return putRaw('todos', r); }));
+    }).then(function () {
+      return Promise.all(vaultMetaKeep.map(function (r) { return putRaw('meta', r); }));
     });
     return chain.then(function () { _mediaCache = {}; return loadSettings(); })
       .then(function () { return saveSettings({ textScale: keepScale, mediaSize: keepSize }); })
@@ -1064,6 +1086,15 @@ var DB = (function () {
      A plain file the user downloads on the S26 and copies wherever they
      want (e.g. USB drive). Import restores every entry as a NEW,
      date-stamped copy (no merge, no overwrite). */
+  /* v0.52 (VAULT-SAFEKEEP-PLAN): every Vault write/delete stamps
+     vaultChangeAt and pokes VaultKeep's 10 s mirror debounce */
+  function vaultChanged() {
+    putRaw('meta', { key: 'vaultChangeAt', value: Date.now() });
+    if (window.VaultKeep && window.VaultKeep.touch) {
+      try { window.VaultKeep.touch(); } catch (e) { /* mirror is best-effort */ }
+    }
+  }
+
   function exportVault() {
     return all('todos').then(function (rows) {
       return {
@@ -1098,7 +1129,10 @@ var DB = (function () {
         return putRaw('todos', inc);
       });
     });
-    return chain.then(function () { return counts; });
+    return chain.then(function () {
+      if (counts.added) vaultChanged(); /* v0.52: refresh the mirror too */
+      return counts;
+    });
   }
 
   /* tasks with a "Now at" time become Now when the clock reaches it */
