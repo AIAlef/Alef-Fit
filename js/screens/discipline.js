@@ -112,6 +112,37 @@ Screens.discipline = (function () {
     return { date: iso, title: cleaned || title.trim() };
   }
 
+  /* ---- v0.54: TOMORROW — a virtual list between TODAY and LATER ----
+     Membership is COMPUTED (startDate === tomorrow), never stored: the
+     list is not a todoCats entry and never rides sync/backups/the share.
+     From 00:01 every task dated for tomorrow surfaces here by itself
+     (tomorrowISO rolls at midnight; draw computes membership live), and
+     the next midnight promoteNowDue carries it on into TODAY. */
+  function tomorrowISO() {
+    var d = new Date(DB.todayISO() + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+  /* The move rules as a pure plan — dropTask applies it, the suite tests
+     it. IN: assign tomorrow 08:00 (a task already scheduled for ANOTHER
+     day asks first; a Today/undated task moves silently). OUT: leaving
+     TOMORROW for any real list clears the assigned date + time. */
+  function tdMovePlan(t, cat, tomISO) {
+    if (cat === 'tomorrow') {
+      if (t.startDate === tomISO) return { ask: null, patch: {} }; /* reorder within the list */
+      return {
+        ask: t.startDate
+          ? 'This task is scheduled for ' + t.startDate + ' ' + (t.startTime || '08:00') +
+            '. Move it to TOMORROW (' + tomISO + ' 08:00) instead?'
+          : null,
+        patch: { cat: 'later', now: false, nowAt: null, startDate: tomISO, startTime: '08:00' }
+      };
+    }
+    if (t.startDate === tomISO) return { ask: null, patch: { startDate: null, startTime: null } };
+    return { ask: null, patch: {} };
+  }
+
   /* ---- v0.48: export tasks as readable text (clipboard / .txt) ---- */
 
   /* one task → markdown-ish block: checkbox line + markers, then subtasks
@@ -471,6 +502,12 @@ Screens.discipline = (function () {
            editable/synced list order). S26 only — hidden on the PC so the
            private data has exactly one home. */
         cats = res[0].slice();
+        /* v0.54: TOMORROW — virtual list right after TODAY (computed
+           membership: tasks whose startDate is tomorrow live here) */
+        var tomISO = tomorrowISO();
+        var tAt = -1;
+        cats.forEach(function (c, ci) { if (c.id === 'today' && tAt < 0) tAt = ci + 1; });
+        cats.splice(tAt < 0 ? 1 : tAt, 0, { id: 'tomorrow', name: 'TOMORROW', color: '#3fb8a8' });
         if ((DB.getSettings() || {}).deviceId !== 'PC') {
           var vAt = cats.length;
           cats.forEach(function (c, ci) { if (c.id === 'project') vAt = ci + 1; });
@@ -516,6 +553,11 @@ Screens.discipline = (function () {
             var home = t.cat || 'today';
             if (home === 'vault') return c.id === 'vault';
             var flagged = t.now || home === 'now';
+            /* v0.54: a task dated for tomorrow shows under TOMORROW, not
+               in its home list (membership rolls over at midnight) */
+            var tom = !flagged && t.startDate === tomISO;
+            if (c.id === 'tomorrow') return tom;
+            if (tom) return false;
             if (c.id === 'today') return flagged || home === 'today';
             return !flagged && home === c.id;
           });
@@ -536,6 +578,11 @@ Screens.discipline = (function () {
                 if (at2 !== bt2) return at2 < bt2 ? -1 : 1;
               }
             }
+            if (c.id === 'tomorrow') {
+              /* v0.54: earliest start time first (most are 08:00) */
+              var at3 = a.startTime || '08:00', bt3 = b.startTime || '08:00';
+              if (at3 !== bt3) return at3 < bt3 ? -1 : 1;
+            }
             return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0);
           });
           var st;
@@ -552,6 +599,9 @@ Screens.discipline = (function () {
           var gInCat = ghosts.filter(function (g) {
             var d = g.data || {};
             var home = d.cat || 'today';
+            var gtom = !d.now && d.startDate === tomISO; /* v0.54 */
+            if (c.id === 'tomorrow') return gtom;
+            if (gtom) return false;
             if (c.id === 'today') return d.now || home === 'today';
             return !d.now && home === c.id;
           });
@@ -717,31 +767,46 @@ Screens.discipline = (function () {
     function dropTask(t, cat, beforeId) {
       if (cat === 'vault' && (DB.getSettings() || {}).deviceId === 'PC') { UI.toast('Vault lives on the S26 only'); return; }
       var wasVault = t.cat === 'vault';
-      DB.all('todos').then(function (allT) {
-        var list;
-        if (cat === 'now') {
-          t.now = true;
-          if (t.cat === 'now') t.cat = 'today';
-          list = allT.filter(function (x) { return (x.now || x.cat === 'now') && !x.done && x.id !== t.id; });
-        } else {
-          t.now = false;
-          t.cat = cat;
-          list = allT.filter(function (x) { return (x.cat || 'today') === cat && !(x.now || x.cat === 'now') && !x.done && x.id !== t.id; });
-        }
-        list.sort(function (a, b) { return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0); });
-        var idx = list.length;
-        if (beforeId) {
-          for (var i = 0; i < list.length; i++) {
-            if (list[i].id === beforeId) { idx = i; break; }
+      /* v0.54: TOMORROW rules — in: assign tomorrow 08:00 (an already-dated
+         task confirms first, a Today task moves silently); out: the
+         assigned date + time clear. */
+      var tomISO = tomorrowISO();
+      var plan = tdMovePlan(t, cat, tomISO);
+      (plan.ask ? UI.confirm(plan.ask, 'Move to TOMORROW') : Promise.resolve(true)).then(function (okMv) {
+        if (!okMv) { draw(); return; }
+        Object.assign(t, plan.patch);
+        DB.all('todos').then(function (allT) {
+          var list;
+          if (cat === 'tomorrow') {
+            list = allT.filter(function (x) {
+              return x.startDate === tomISO && !(x.now || x.cat === 'now') &&
+                (x.cat || 'today') !== 'vault' && !x.done && x.id !== t.id;
+            });
+          } else if (cat === 'now') {
+            t.now = true;
+            if (t.cat === 'now') t.cat = 'today';
+            list = allT.filter(function (x) { return (x.now || x.cat === 'now') && !x.done && x.id !== t.id; });
+          } else {
+            t.now = false;
+            t.cat = cat;
+            list = allT.filter(function (x) { return (x.cat || 'today') === cat && !(x.now || x.cat === 'now') && !x.done && x.id !== t.id && x.startDate !== tomISO; });
           }
-        }
-        list.splice(idx, 0, t);
-        Promise.all(list.map(function (x, i2) {
-          x.order = (i2 + 1) * 10;
-          return DB.put('todos', x);
-        })).then(function () {
-          if (cat === 'vault' && !wasVault) UI.toast('Moved to Vault 🔒 — stays on this phone only');
-          draw();
+          list.sort(function (a, b) { return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0); });
+          var idx = list.length;
+          if (beforeId) {
+            for (var i = 0; i < list.length; i++) {
+              if (list[i].id === beforeId) { idx = i; break; }
+            }
+          }
+          list.splice(idx, 0, t);
+          Promise.all(list.map(function (x, i2) {
+            x.order = (i2 + 1) * 10;
+            return DB.put('todos', x);
+          })).then(function () {
+            if (cat === 'vault' && !wasVault) UI.toast('Moved to Vault 🔒 — stays on this phone only');
+            if (cat === 'tomorrow' && plan.patch.startDate) UI.toast('Moved to TOMORROW — starts ' + tomISO + ' 08:00');
+            draw();
+          });
         });
       });
     }
@@ -971,13 +1036,16 @@ Screens.discipline = (function () {
       function save() {
         var v = p.querySelector('.qa-input').value.trim();
         if (!v) return;
-        /* v0.50: a DDMMYY token in the title schedules the start date */
+        /* v0.50: a DDMMYY token in the title schedules the start date.
+           v0.54: adding straight into TOMORROW schedules tomorrow 08:00. */
         var tok = parseStartToken(v);
         if (tok) UI.toast('Starts ' + tok.date + ' 08:00');
+        var tomQ = selCat === 'tomorrow' ? tomorrowISO() : null;
+        var sd = tok ? tok.date : tomQ;
         DB.put('todos', {
-          id: DB.uid(), title: tok ? tok.title : v, cat: selCat, now: tok ? false : nowOn,
+          id: DB.uid(), title: tok ? tok.title : v, cat: tomQ ? 'later' : selCat, now: (tok || tomQ) ? false : nowOn,
           prio: 'none', tags: [], subs: [], note: '',
-          startDate: tok ? tok.date : null, startTime: tok ? '08:00' : null,
+          startDate: sd, startTime: sd ? '08:00' : null,
           done: false, dueDate: null, time: null, allDay: false, createdAt: Date.now()
         }).then(function () {
           p.querySelector('.qa-input').value = '';
@@ -1767,6 +1835,8 @@ Screens.discipline = (function () {
         t.cat = 'never';
         t.now = false;
         t.nowAt = null;
+        t.startDate = null; /* v0.54: Never = out of plans — the schedule clears */
+        t.startTime = null;
         refreshTags();
         UI.toast('Rated Never — moves to the NEVER list on save');
       }
@@ -3141,5 +3211,6 @@ Screens.discipline = (function () {
      New entries prefill with the last session's numbers. */
 
   return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
-    _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport };
+    _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport,
+    _tomorrowISO: tomorrowISO, _tdMovePlan: tdMovePlan };
 })();

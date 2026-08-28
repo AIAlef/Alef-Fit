@@ -1,9 +1,12 @@
 /* Alef.Fit — first-run Setup wizard (v0.39, docs/ROLES-SETUP-PLAN.md).
    Shown once on an UNCLAIMED fresh install (no deviceId, setup not done).
-   Ladder: 1 import sync info (the identity key) → 2 Google sign-in →
-   3 Full Sync → 4 claim a role (S26 main / PC main) → optional Vault
-   import for the S26. The tier-1 backup file holds client ID + SECRET +
-   toggles — possession of it IS the privilege confirmation. */
+   v0.54: ONE-STOP restore on top — for a freshly installed S26 APK the
+   whole ladder runs as one flow (2-file import → Google sign-in → Full
+   Sync → claim S26 → Alef.do), resumable at the step that failed.
+   Manual ladder below: 1 import sync info (the identity key) → 2 Google
+   sign-in → 3 Full Sync → 4 claim a role (S26 main / PC main) → optional
+   Vault import for the S26. The tier-1 backup file holds client ID +
+   SECRET + toggles — possession of it IS the privilege confirmation. */
 'use strict';
 
 window.Screens = window.Screens || {};
@@ -18,8 +21,73 @@ Screens.setup = (function () {
     el.appendChild(pad);
 
     pad.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Fresh install. ' +
-      'Three steps to reconnect, then choose this app\'s role. Backup files live in ' +
-      '<b>S26 › Documents › S26-Alef-Fit</b> (or your Downloads folder).</div>'));
+      'One-stop restore brings everything back in one flow — or use the manual steps below. ' +
+      'Backup files live in <b>S26 › Documents › S26-Alef-Fit</b> (or your Downloads folder).</div>'));
+
+    /* ---- v0.54: ONE-STOP restore — the whole ladder as one service ----
+       For a newly installed S26 APK: pick the two files (RestoreFlow) →
+       Google sign-in → Full Sync → claim S26 → land in Alef.do. A failed
+       step leaves the button resumable AT that step; the manual cards
+       below stay as the fallback. */
+    var cO = UI.el('<div class="card"></div>');
+    var bO = UI.el('<button class="btn btn-primary btn-block su-glow">⚡ One-stop restore — new S26</button>');
+    var sO = UI.el('<div class="sub" style="margin-top:6px">Import Full backup + Vault, connect Google, Full Sync, become the main S26 — one flow.</div>');
+    var osStage = 0; /* 0 pick files · 2 connect · 3 sync · 4 claim */
+    var osBusy = false;
+    function osFail(step, err) {
+      osBusy = false;
+      osStage = step;
+      sO.textContent = '⚠ ' + String((err && err.message) || err);
+      bO.textContent = '⚡ Continue one-stop — step ' + step + ' of 4';
+    }
+    function osConnect() {
+      osBusy = true;
+      osStage = 2;
+      sO.textContent = 'Step 2 of 4 — connecting Google (one popup)…';
+      if (!Sync.hasClientId()) { osFail(2, new Error('No Google settings in that backup — do manual step 1 first')); return; }
+      DB.get('meta', 'gdriveRefreshToken').then(function (r) {
+        return (r && r.value) ? null : Sync.reconnect();
+      }).then(osSync).catch(function (e) { osFail(2, e); });
+    }
+    function osSync() {
+      osBusy = true;
+      osStage = 3;
+      sO.textContent = 'Step 3 of 4 — Full Sync, pulling your data…';
+      Sync.syncNow(function (msg) { sO.textContent = 'Step 3 of 4 — ' + (msg || '…'); }).then(function (res) {
+        _syncedNow = true;
+        var p2 = (res && res.pulled) || { added: 0, updated: 0 };
+        sO.textContent = '✓ Synced +' + p2.added + ' / ~' + p2.updated + ' — step 4 of 4: claim the role';
+        osClaim();
+      }).catch(function (e) { osFail(3, e); });
+    }
+    function osClaim() {
+      osBusy = true;
+      osStage = 4;
+      UI.confirm('Make THIS app the main S26? An older S26 install will retire on its next sync.', 'Claim S26').then(function (ok) {
+        if (!ok) { osFail(4, 'Claim skipped — tap the button to finish'); return; }
+        DB.claimRole('S26').then(function () {
+          sO.textContent = '✓ Done — this app is the main S26';
+          UI.toast('One-stop restore complete ✓');
+          location.hash = '#/discipline/todo';
+        });
+      });
+    }
+    bO.addEventListener('click', function () {
+      if (osBusy) return;
+      if (osStage >= 4) { osClaim(); return; }
+      if (osStage === 3) { osSync(); return; }
+      if (osStage === 2) { osConnect(); return; }
+      if (!window.RestoreFlow) { UI.toast('Restore module not loaded'); return; }
+      RestoreFlow.open(function () {
+        paintStep1();
+        sO.textContent = '✓ Files imported (data + Vault)';
+        osConnect();
+      });
+    });
+    cO.appendChild(bO); cO.appendChild(sO);
+    pad.appendChild(cO);
+
+    pad.appendChild(UI.el('<div class="section-title">Manual steps</div>'));
 
     /* ---- step 1 · import sync info (highlighted) ---- */
     var c1 = UI.el('<div class="card"></div>');
@@ -62,17 +130,6 @@ Screens.setup = (function () {
     paintStep1();
     c1.appendChild(b1); c1.appendChild(f1); c1.appendChild(s1);
     pad.appendChild(c1);
-
-    /* ---- v0.53: REAL full restore — Full backup + Vault in one go ---- */
-    var cR = UI.el('<div class="card"></div>');
-    var bR = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Full restore — 2 files (backup + Vault)</button>');
-    bR.addEventListener('click', function () {
-      if (!window.RestoreFlow) { UI.toast('Restore module not loaded'); return; }
-      RestoreFlow.open(function () { paintStep1(); });
-    });
-    cR.appendChild(bR);
-    cR.appendChild(UI.el('<div class="sub" style="margin-top:6px">Brings EVERYTHING back at once: pick the Full backup file and the Vault file — each panel shows the file\'s date so you can check you grabbed the right ones. Cancel backs out any time.</div>'));
-    pad.appendChild(cR);
 
     /* ---- step 2 · Google sign-in ---- */
     var c2 = UI.el('<div class="card"></div>');

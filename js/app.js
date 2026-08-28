@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.53.0';
+var APP_VERSION = '0.54.0';
 
 var App = (function () {
 
@@ -69,13 +69,18 @@ var App = (function () {
   /* In-app alert ticker: fires To-do alerts and Alarm Reminders while the
      app is open. Background alarms arrive with the Capacitor wrap (M4). */
   var _fired = {};
+  var _lastDay = null;
   function tickAlerts() {
+    var today = DB.todayISO();
+    /* v0.54: the date rolled over while the app was open — redraw Alef.do
+       so tasks dated for the (new) tomorrow slot into TOMORROW at 00:01 */
+    if (_lastDay && _lastDay !== today && location.hash === '#/discipline/todo') route();
+    _lastDay = today;
     DB.promoteNowDue().then(function (n) {
       if (n && location.hash === '#/discipline/todo') route();
     });
     var now = new Date();
     var hm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    var today = DB.todayISO();
     DB.all('alarms').then(function (alarms) {
       alarms.forEach(function (a) {
         if (!a.enabled || a.time !== hm) return;
