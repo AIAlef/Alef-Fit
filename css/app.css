@@ -903,10 +903,7 @@ html[data-msize="l"] .media-stage .crop-box { --stage-max: 440px; }
 .rw-panel.rw-ok { border-style: solid; border-color: #4fb06d; }
 .rw-panel.rw-bad { border-style: solid; border-color: var(--danger); }
 
-/* v0.53: Schedules (work calendar) section */
-.sched-title { margin-top: 10px; }
-.sched-row .li-sub { font-size: .72rem; }
-.sched-hint { margin: 2px 2px 8px; }
+/* (v0.53 Schedules styles removed in v0.55 — section dropped) */
 .td-b-diamond { background: linear-gradient(135deg, #eaf5ff 0%, #a8d4ff 30%, #e6f0ff 50%, #7fb8f0 72%, #dcefff 100%); overflow: hidden; }
 .td-b-diamond::after {
   content: ''; position: absolute; top: -40%; left: -80%; width: 55%; height: 180%;

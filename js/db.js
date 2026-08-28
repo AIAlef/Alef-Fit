@@ -59,7 +59,6 @@ var DB = (function () {
     autoSync: true,             // Drive auto-sync triggers (device-local)
     pcProposals: true,          // PC: governed edits become proposals (device-local)
     landingPage: 'todo',        // page the app opens on: todo|exercise|discipline|program|retro|setting
-    workCalId: '',              // v0.53: work calendar id for Schedules ('' = alefthieng@gmail.com)
     motivFolder: '',            // v0.44: Fitness Motivation Drive folder (id or URL; '' = built-in default)
     aesthFolder: '',            // v0.47: Aesthetic Collection Drive folder (images; '' = built-in default)
     devTextEdit: false,         // Developer: tap-to-edit app texts (device-local)
