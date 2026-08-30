@@ -1359,3 +1359,8 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 .bk-help svg { width: 17px; height: 17px; }
 .bk-help-body p { margin: 0 0 8px; font-size: .82rem; line-height: 1.45; }
 .bk4-status { white-space: pre-line; }
+
+/* ==== v0.59: inbox flow ==== */
+.mv-card.mv-missed .mv-thumb { border-color: #c0564f; }
+.mv-card.mv-missed .mv-name { color: #d07a74; }
+.mv-loc.mv-inbox { background: rgba(120, 120, 120, .75); }

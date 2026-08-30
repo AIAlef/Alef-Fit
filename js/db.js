@@ -734,6 +734,16 @@ var DB = (function () {
                off the cloud too — only the LOCAL full backup carries them */
             if (!withVault && r.key.indexOf('vault') === 0) return false;
             return true;
+          }).map(function (r) {
+            /* v0.59 (ruling 4): collection catalogs export WITHOUT their
+               thumbnail dataURLs — covers regenerate from local bytes,
+               and 1-2 MB of thumbs must not ride every sync/backup */
+            if ((r.key === 'motivList' || r.key === 'aesthList') && r.value && r.value.items) {
+              var c = JSON.parse(JSON.stringify(r));
+              c.value.items.forEach(function (x) { delete x.thumb; });
+              return c;
+            }
+            return r;
           });
         }
         if (s === 'proposals') rows = rows.filter(function (r) { return r.status !== 'draft'; });
@@ -994,7 +1004,10 @@ var DB = (function () {
     var incSet = rows.find(function (r) { return r.key === 'settings'; });
     if (incSet && incSet.value) chain = chain.then(function () { return mergeSettings(incSet.value); });
     return chain.then(function () {
-      return mergeMetaKeys(rows, ['programCats', 'todoCats', 'textOverrides', 'todoReflect']);
+      /* v0.59: the collection CATALOGS ride the sync (thumbs stripped on
+         export) so a new phone gets names/ratings/order instantly; the
+         PC never writes them, so newest-wins = the S26 */
+      return mergeMetaKeys(rows, ['programCats', 'todoCats', 'textOverrides', 'todoReflect', 'motivList', 'aesthList']);
     });
   }
 

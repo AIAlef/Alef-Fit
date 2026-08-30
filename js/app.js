@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.58.0';
+var APP_VERSION = '0.59.0';
 
 var App = (function () {
 
@@ -176,6 +176,11 @@ var App = (function () {
           Native.init();   // APK: schedule real background alarms
         }
         if (window.Sync && Sync.autoInit) Sync.autoInit();
+        /* v0.59: the phone is PRIMARY for collection media — ask Android
+           to treat this app's storage as non-evictable */
+        try {
+          if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () { /* ok */ });
+        } catch (e3) { /* older WebView */ }
         /* v0.52: if the app closed before the 10 s mirror debounce fired,
            bring the Vault retention copy back up to date */
         if (window.VaultKeep) setTimeout(function () { VaultKeep.catchUp(); }, 6000);

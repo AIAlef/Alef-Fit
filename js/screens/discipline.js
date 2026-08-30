@@ -1096,7 +1096,7 @@ Screens.discipline = (function () {
 
   /* v0.49: image-viewer zoom — mouse wheel, two-finger pinch, tap toggles
      1×/2×. Zoomed image pans with native overlay scrolling. */
-  function ivZoom(ov, v) {
+  function ivZoom(ov, v, opts) {
     var z = 1, baseW = 0, pinch = null, lastPinchAt = 0;
     function apply(nz, cx, cy) {
       if (!baseW) baseW = v.clientWidth || v.naturalWidth || 1;
@@ -1140,10 +1140,14 @@ Screens.discipline = (function () {
       }
     }, { passive: false });
     ov.addEventListener('touchend', function () { pinch = null; });
-    v.addEventListener('click', function () {
-      if (Date.now() - lastPinchAt < 350) return; /* pinch settling, not a tap */
-      apply(z > 1 ? 1 : 2);
-    });
+    /* v0.59: videos zoom too, but tap-to-zoom would fight play/pause —
+       they get pinch + wheel only (opts.noTap) */
+    if (!(opts && opts.noTap)) {
+      v.addEventListener('click', function () {
+        if (Date.now() - lastPinchAt < 350) return; /* pinch settling, not a tap */
+        apply(z > 1 ? 1 : 2);
+      });
+    }
   }
   function renderMotiv(el) {
     renderCollection(el, {
@@ -1184,11 +1188,16 @@ Screens.discipline = (function () {
   function renderCollection(el, cfg) {
     var items = [];
     var stored = {}; /* fileId → 1 when the file is saved on this phone */
-    function save() { return mvSave(items, cfg.metaKey); }
-    var hdr = UI.header({
-      title: cfg.title, back: '#/discipline',
-      action: { icon: 'sync', label: 'Sync ' + cfg.noun + 's', onClick: doSync }
-    });
+    /* v0.59: the S26 is PRIMARY for the collections; the PC is a read-only
+       viewer — no ingest, no edits, no jobs, no list writes from there. */
+    var isPC = (DB.getSettings() || {}).deviceId === 'PC';
+    function save() { return isPC ? Promise.resolve() : mvSave(items, cfg.metaKey); }
+    var hdr = UI.header(isPC
+      ? { title: cfg.title, back: '#/discipline' }
+      : {
+        title: cfg.title, back: '#/discipline',
+        action: { icon: 'sync', label: 'Sync ' + cfg.noun + 's', onClick: doSync }
+      });
     el.appendChild(hdr);
     /* v0.46: ⬇ download-all (icon only) sits LEFT of the ↻ refresh.
        v0.49: while a job runs it turns into an animated arrow + % text,
@@ -1196,7 +1205,7 @@ Screens.discipline = (function () {
     var dlBtn = UI.el('<button class="btn-icon dl-btn" aria-label="Download all ' + cfg.noun + 's to this phone">' + UI.icon('download') + '</button>');
     dlBtn.addEventListener('click', function () { doDownload(); });
     var actSpan = hdr.querySelector('.topbar-action');
-    actSpan.insertBefore(dlBtn, actSpan.firstChild);
+    if (!isPC && actSpan) actSpan.insertBefore(dlBtn, actSpan.firstChild);
     function paintDl() {
       if (!dlBtn.isConnected) return;
       var job = _mvDl[cfg.metaKey];
@@ -1227,10 +1236,14 @@ Screens.discipline = (function () {
         UI.toast(files.length + ' ' + cfg.noun + (files.length === 1 ? '' : 's') + ' added — ☁ Apply uploads them to Drive');
       }).catch(function () { UI.toast('Could not read some files'); });
     });
-    actSpan.insertBefore(addBtn, actSpan.firstChild);
+    if (!isPC && actSpan) actSpan.insertBefore(addBtn, actSpan.firstChild);
     var pad = UI.el('<div class="pagepad"></div>');
     el.appendChild(pad);
     pad.appendChild(addFile);
+    if (isPC) pad.appendChild(UI.el('<div class="sub" style="margin-bottom:6px">View only on the PC — this collection is managed on the S26.</div>'));
+    /* v0.59: how much of the collection lives on this phone */
+    var sizeLine = UI.el('<div class="sub mv-size" style="margin-bottom:6px"></div>');
+    pad.appendChild(sizeLine);
     var wrap = UI.el('<div></div>');
     pad.appendChild(wrap);
 
@@ -1250,7 +1263,8 @@ Screens.discipline = (function () {
           mime: f.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
           thumbLink: null, thumb: null,
           origName: p.name, origRating: p.rating,
-          name: p.name, rating: p.rating, isNew: true
+          name: p.name, rating: p.rating, isNew: true,
+          state: 'stored', bytes: buf.byteLength /* v0.59: lives on the phone */
         };
         return DB.put('motivVideos', { id: id, buf: buf, type: it.mime, name: it.name, size: buf.byteLength, savedAt: Date.now() })
           .then(function () {
@@ -1261,9 +1275,97 @@ Screens.discipline = (function () {
       });
     }
 
-    /* v0.46: download every (non-X) video into IndexedDB, one file at a
-       time. Each finished file is committed immediately, so an interrupted
-       run RESUMES: already-stored videos are skipped on the next tap. */
+    /* v0.46: download into IndexedDB one file at a time; every finished
+       file is committed immediately, so an interrupted run RESUMES.
+       v0.59: the shared engine also powers the silent AUTO-INGEST (the
+       Drive folder is an INBOX now) — after a file's bytes are committed
+       and verified it is MOVED to the folder's "Downloaded" subfolder,
+       so the inbox empties itself and Alef deletes from Downloaded at
+       leisure. Files already stored but never moved (pre-v0.59) get their
+       move retried here too. */
+    function blobBuf(b) { /* arrayBuffer() is missing in older WebViews */
+      if (b.arrayBuffer) return b.arrayBuffer();
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = reject;
+        fr.readAsArrayBuffer(b);
+      });
+    }
+    function moveToDownloaded(it) {
+      if (!window.Sync || !Sync.motivMove) return Promise.resolve();
+      return Sync.motivMove(it.id, cfg.folderId()).then(function () {
+        it.moved = true;
+      }).catch(function (eM) {
+        /* 404 = the inbox file is already gone — nothing left to move */
+        if (/404/.test(String((eM && eM.message) || eM))) it.moved = true;
+      });
+    }
+    function runIngest(todo, silent) {
+      var job = { active: true, done: 0, total: todo.length, onTick: paintDl };
+      _mvDl[cfg.metaKey] = job;
+      paintDl();
+      var fails = 0;
+      var chain = Promise.resolve();
+      todo.forEach(function (it) {
+        chain = chain.then(function () {
+          return Sync.motivBlob(it.id).then(function (b) {
+            return blobBuf(b).then(function (buf) {
+              return DB.put('motivVideos', {
+                id: it.id, buf: buf, type: b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
+                name: it.name, size: buf.byteLength, savedAt: Date.now()
+              }).then(function () {
+                it.state = 'stored';       /* bytes committed FIRST… */
+                it.bytes = buf.byteLength;
+                return moveToDownloaded(it); /* …then the inbox move (retry-safe) */
+              });
+            });
+          }).then(function () {
+            job.done++;
+            stored[it.id] = 1;
+          }).catch(function () { fails++; }).then(function () {
+            if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
+          });
+        });
+      });
+      return chain.then(function () {
+        /* pre-v0.59 stored files still sitting in the inbox → move them too */
+        var toMove = items.filter(function (x) { return x.state === 'stored' && !x.isNew && !x.moved; });
+        var mChain = Promise.resolve();
+        toMove.forEach(function (x) { mChain = mChain.then(function () { return moveToDownloaded(x); }); });
+        return mChain;
+      }).then(function () {
+        job.active = false;
+        if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
+        return save();
+      }).then(function () {
+        if (!silent || job.done || fails) {
+          UI.toast(fails
+            ? 'Stored ' + job.done + '/' + job.total + ' — the rest retries next time'
+            : (job.total ? job.total + ' ' + cfg.noun + (job.total === 1 ? '' : 's') + ' stored on this phone ✓' : 'Inbox tidied ✓'));
+        }
+        if (wrap.isConnected) draw();
+      });
+    }
+    /* silent auto-ingest: new inbox files download by themselves (S26
+       only, and only with silent auth — an auto job never pops sign-in) */
+    function autoIngest() {
+      if (isPC) return;
+      var run = _mvDl[cfg.metaKey];
+      if (run && run.active) return;
+      DB.get('meta', 'gdriveRefreshToken').then(function (tok) {
+        if (!(tok && tok.value)) return;
+        return DB.allKeys('motivVideos').then(function (keys) {
+          var have = {};
+          keys.forEach(function (k) { have[k] = 1; });
+          var todo = items.filter(function (it) { return it.state === 'inbox' && it.rating !== 'X' && !it.isNew && !have[it.id]; });
+          var pendingMoves = items.some(function (x) { return x.state === 'stored' && !x.isNew && !x.moved; });
+          if (!todo.length && !pendingMoves) return;
+          runIngest(todo, true);
+        });
+      });
+    }
+    /* ⬇ button: manual full download (also re-fetches lost local copies) */
     function doDownload() {
       var run = _mvDl[cfg.metaKey];
       if (run && run.active) {
@@ -1273,52 +1375,13 @@ Screens.discipline = (function () {
       DB.allKeys('motivVideos').then(function (keys) {
         var have = {};
         keys.forEach(function (k) { have[k] = 1; });
-        var todo = items.filter(function (it) { return it.rating !== 'X' && !it.isNew && !have[it.id]; });
+        var todo = items.filter(function (it) { return it.rating !== 'X' && !it.isNew && !have[it.id] && it.state !== 'missed'; });
         if (!todo.length) { UI.toast('All ' + cfg.noun + 's are already on this phone ✓'); return; }
         UI.confirm('Download ' + todo.length + ' ' + cfg.noun + (todo.length === 1 ? '' : 's') +
-          ' from Google Drive to this phone? They then open instantly and work offline. ' +
-          'The job runs in the background (the ⬇ button shows %); every finished file is kept, and tapping ⬇ again RESUMES with the rest.',
+          ' from Google Drive to this phone? The job runs in the background (the ⬇ button shows %); every finished file is kept and MOVED to the Downloaded folder in Drive; tapping ⬇ again RESUMES with the rest.',
           'Download').then(function (ok) {
           if (!ok) return;
-          var job = { active: true, done: 0, total: todo.length, onTick: paintDl };
-          _mvDl[cfg.metaKey] = job;
-          paintDl();
-          var fails = 0;
-          var chain = Promise.resolve();
-          function blobBuf(b) { /* arrayBuffer() is missing in older WebViews */
-            if (b.arrayBuffer) return b.arrayBuffer();
-            return new Promise(function (resolve, reject) {
-              var fr = new FileReader();
-              fr.onload = function () { resolve(fr.result); };
-              fr.onerror = reject;
-              fr.readAsArrayBuffer(b);
-            });
-          }
-          todo.forEach(function (it) {
-            chain = chain.then(function () {
-              return Sync.motivBlob(it.id).then(function (b) {
-                return blobBuf(b).then(function (buf) {
-                  return DB.put('motivVideos', {
-                    id: it.id, buf: buf, type: b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
-                    name: it.name, size: buf.byteLength, savedAt: Date.now()
-                  });
-                });
-              }).then(function () {
-                job.done++;
-                stored[it.id] = 1;
-              }).catch(function () { fails++; }).then(function () {
-                if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
-              });
-            });
-          });
-          chain.then(function () {
-            job.active = false;
-            if (job.onTick) { try { job.onTick(); } catch (e) { /* page gone */ } }
-            UI.toast(fails
-              ? 'Stored ' + job.done + '/' + job.total + ' — tap ⬇ again to resume the rest'
-              : 'All ' + job.total + ' ' + cfg.noun + 's stored on this phone ✓');
-            if (wrap.isConnected) draw();
-          });
+          runIngest(todo, false);
         });
       });
     }
@@ -1344,9 +1407,23 @@ Screens.discipline = (function () {
         files.forEach(function (f) { byId[f.id] = f; });
         var next = [];
         items.forEach(function (it) {
-          if (it.isNew) { next.push(it); return; }   /* staged upload — not in Drive yet */
+          if (it.isNew) { it.state = 'stored'; next.push(it); return; }   /* staged upload — not in Drive yet */
           var f = byId[it.id];
-          if (!f) return;
+          if (!f) {
+            /* v0.59: not in the inbox anymore. STORED items live on —
+               that is the whole point of local-primary (the file was
+               moved to Downloaded or deleted by Alef). An item that was
+               never ingested is marked MISSED (red row — re-add it). */
+            if (it.state === 'stored' || stored[it.id]) {
+              it.state = 'stored';
+              it.moved = true; /* gone from the inbox = nothing to move */
+              next.push(it);
+              return;
+            }
+            it.state = 'missed';
+            next.push(it);
+            return;
+          }
           delete byId[it.id];
           var p = mvParse(f.name);
           if (!mvDirty(it)) { it.name = p.name; it.rating = p.rating; } /* no staged edit → follow Drive */
@@ -1356,19 +1433,28 @@ Screens.discipline = (function () {
           it.thumbLink = f.thumbnailLink || it.thumbLink;
           it.origName = p.name;
           it.origRating = p.rating;
+          if (it.state !== 'stored') it.state = stored[it.id] ? 'stored' : 'inbox';
           next.push(it);
         });
+        /* v0.59 dedupe: a re-uploaded file with a name the collection
+           already has (stored) is ignored — never two copies of the bytes */
+        var haveNames = {};
+        next.forEach(function (x) { if (x.drvName) haveNames[x.drvName] = 1; });
+        var dups = 0;
         files.forEach(function (f) {
           if (!byId[f.id]) return;
+          if (haveNames[f.name]) { dups++; return; }
           var p = mvParse(f.name);
           next.push({
             id: f.id, drvName: f.name, ext: p.ext, mime: f.mimeType,
             thumbLink: f.thumbnailLink || null, thumb: null,
             origName: p.name, origRating: p.rating,
-            name: p.name, rating: p.rating
+            name: p.name, rating: p.rating,
+            state: 'inbox', bytes: parseInt(f.size, 10) || 0
           });
         });
         items = next;
+        if (dups) UI.toast(dups + ' duplicate inbox file' + (dups === 1 ? '' : 's') + ' ignored — already in the collection');
         return save().then(function () {
           draw();
           /* thumbnails after the list is on screen */
@@ -1383,6 +1469,7 @@ Screens.discipline = (function () {
         if (btn) btn.classList.remove('spin');
         UI.toast((cfg.noun === 'video' ? 'Videos: ' : 'Images: ') + items.length);
         draw();
+        autoIngest(); /* v0.59: new inbox files start downloading right away */
       }).catch(function (e) {
         if (btn) btn.classList.remove('spin');
         UI.toast(hintFor(e));
@@ -1399,6 +1486,7 @@ Screens.discipline = (function () {
         } else {
           v = document.createElement('video');
           v.src = url; v.controls = true; v.autoplay = true; v.playsInline = true;
+          ivZoom(ov, v, { noTap: true }); /* v0.59: pinch/wheel zoom on videos */
         }
         ov.appendChild(v);
         var x = UI.el('<button class="iv-x" aria-label="Close">✕</button>');
@@ -1523,6 +1611,8 @@ Screens.discipline = (function () {
                       it.origName = it.name;
                       it.origRating = it.rating;
                       it.drvName = mvDriveName(it);
+                      it.state = 'stored'; /* v0.59: bytes are local; the next ingest pass moves the upload to Downloaded */
+                      it.moved = false;
                       if (res.thumbnailLink) it.thumbLink = res.thumbnailLink;
                     });
                 });
@@ -1537,7 +1627,12 @@ Screens.discipline = (function () {
         });
         toRename.forEach(function (it) {
           chain = chain.then(function () {
-            return Sync.motivPatch(it.id, { name: mvDriveName(it) }).then(function () {
+            /* v0.59: the Drive original may be GONE (deleted from
+               Downloaded) — local-primary means the rename/rating then
+               lives in the app alone; a 404 is not a failure */
+            return Sync.motivPatch(it.id, { name: mvDriveName(it) }).catch(function (eR) {
+              if (!/404/.test(String((eR && eR.message) || eR))) throw eR;
+            }).then(function () {
               it.origName = it.name;
               it.origRating = it.rating;
               it.drvName = mvDriveName(it);
@@ -1546,7 +1641,11 @@ Screens.discipline = (function () {
         });
         toTrash.forEach(function (it) {
           chain = chain.then(function () {
-            return Sync.motivPatch(it.id, { trashed: true }).then(function () {
+            /* v0.59: X removes the phone copy; the Drive file (inbox OR
+               Downloaded) is trashed when it still exists (404 is fine) */
+            return Sync.motivPatch(it.id, { trashed: true }).catch(function (eT) {
+              if (!/404/.test(String((eT && eT.message) || eT))) throw eT;
+            }).then(function () {
               items = items.filter(function (x) { return x.id !== it.id; });
               return DB.del('motivVideos', it.id); /* v0.46: free its phone copy too */
             }).catch(function () { fails++; });
@@ -1565,6 +1664,14 @@ Screens.discipline = (function () {
       DB.allKeys('motivVideos').then(function (keys) {
         stored = {};
         keys.forEach(function (k) { stored[k] = 1; });
+        /* v0.59: the on-phone line */
+        if (sizeLine.isConnected) {
+          var onPhone = items.filter(function (x) { return stored[x.id]; }).length;
+          var mb = items.reduce(function (a, x) { return a + (stored[x.id] && x.bytes ? x.bytes : 0); }, 0) / 1048576;
+          sizeLine.textContent = items.length
+            ? onPhone + ' of ' + items.length + ' on this phone' + (mb >= 0.1 ? ' · ' + mb.toFixed(1) + ' MB' : '')
+            : '';
+        }
         drawBody();
         fillLocalThumbs();
       }).catch(drawBody);
@@ -1575,6 +1682,7 @@ Screens.discipline = (function () {
        the 📷 camera capture (v0.45) still replaces a video cover any time. */
     var _thumbJob = false, _thumbTried = {};
     function fillLocalThumbs() {
+      if (isPC) return; /* v0.59: covers regenerate on the S26 only */
       if (_thumbJob) return;
       var todo = items.filter(function (it) {
         return !it.thumb && stored[it.id] && it.rating !== 'X' && !_thumbTried[it.id];
@@ -1621,19 +1729,24 @@ Screens.discipline = (function () {
         wrap.appendChild(UI.el('<div class="section-title mv-cat' + (r === 'X' ? ' mv-cat-x' : '') + '" data-r="' + r + '">' + lb + ' <span class="tdc-n">(' + inR.length + ')</span></div>'));
         var grid = UI.el('<div class="mv-grid' + (cfg.cols === 3 ? ' mv-3' : '') + '"></div>');
         inR.forEach(function (it) {
-          var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + '" data-id="' + it.id + '">' +
+          var missed = it.state === 'missed';
+          var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + (missed ? ' mv-missed' : '') + '" data-id="' + it.id + '">' +
             '<button class="mv-thumb fit-' + (it.fit === 'w' ? 'w' : 'h') + '" aria-label="play">' +
-            (it.thumb ? '<img src="' + it.thumb + '" alt="">' : '<span class="mv-ph">▶</span>') +
-            (stored[it.id] ? '<span class="mv-loc" title="Stored on this phone">✓</span>' : '') +
+            (it.thumb ? '<img src="' + it.thumb + '" alt="">' : '<span class="mv-ph">' + (missed ? '⚠' : '▶') + '</span>') +
+            (stored[it.id] ? '<span class="mv-loc" title="Stored on this phone">✓</span>'
+              : (it.state === 'inbox' ? '<span class="mv-loc mv-inbox" title="Waiting in the Drive inbox">⏳</span>' : '')) +
             '</button>' +
-            '<div class="mv-row"><span class="mv-name">' + UI.esc(it.name) + (mvDirty(it) ? ' <span class="mv-dot">●</span>' : '') + '</span>' +
-            '<button class="btn-icon sm mv-edit" aria-label="edit">' + UI.icon('edit') + '</button></div></div>');
+            '<div class="mv-row"><span class="mv-name">' + (missed ? '⚠ ' : '') + UI.esc(it.name) + (mvDirty(it) ? ' <span class="mv-dot">●</span>' : '') + '</span>' +
+            (isPC ? '' : '<button class="btn-icon sm mv-edit" aria-label="edit">' + UI.icon('edit') + '</button>') + '</div></div>');
+          if (missed) card.title = 'Deleted in Drive before it was downloaded — add the file to the inbox again (X removes this row)';
           card.querySelector('.mv-thumb').addEventListener('click', function () {
             if (card.dataset.held) { delete card.dataset.held; return; } /* drag, not a tap */
+            if (missed) { UI.toast('This file was deleted in Drive before download — add it again, or rate it X to remove the row'); return; }
             play(it);
           });
-          card.querySelector('.mv-edit').addEventListener('click', function () { editSheet(it); });
-          enableCardDrag(card, it);
+          var edB = card.querySelector('.mv-edit');
+          if (edB) edB.addEventListener('click', function () { editSheet(it); });
+          if (!isPC) enableCardDrag(card, it);
           grid.appendChild(card);
         });
         wrap.appendChild(grid);
@@ -1736,14 +1849,31 @@ Screens.discipline = (function () {
     }
     DB.get('meta', cfg.metaKey).then(function (r) {
       items = (r && r.value && r.value.items) || [];
-      draw();
-      if (!items.length) {
-        /* v0.50: first visit auto-pulls ONLY when silent auth exists —
-           merely opening a page must never pop the Google sign-in */
-        DB.get('meta', 'gdriveRefreshToken').then(function (tok) {
-          if (tok && tok.value) doSync();
+      /* v0.59 upgrade migration: tag legacy items with their lifecycle
+         state — bytes on the phone → 'stored', else still 'inbox'. The
+         first ↻ reconciles anything that already left Drive. Nothing is
+         ever dropped here. */
+      return DB.allKeys('motivVideos').then(function (keys) {
+        var have = {};
+        keys.forEach(function (k) { have[k] = 1; });
+        var migrated = false;
+        items.forEach(function (it) {
+          if (it.state) return;
+          it.state = (it.isNew || have[it.id]) ? 'stored' : 'inbox';
+          migrated = true;
         });
-      }
+        return migrated ? save() : null;
+      }).catch(function () { /* draw regardless */ });
+    }).then(function () {
+      draw();
+      if (isPC) return; /* the PC only views */
+      /* v0.50: auto actions ONLY when silent auth exists — opening a
+         page must never pop the Google sign-in */
+      DB.get('meta', 'gdriveRefreshToken').then(function (tok) {
+        if (!(tok && tok.value)) return;
+        if (!items.length) { doSync(); return; }
+        autoIngest(); /* v0.59: waiting inbox files download quietly */
+      });
     });
   }
 

@@ -639,6 +639,39 @@ window.Sync = (function () {
     });
   }
 
+  /* v0.59 (ruling 6): after a file is ingested to the phone, MOVE it from
+     the inbox (the collection folder) into its "Downloaded" subfolder —
+     the inbox then only shows what is pending, and everything in
+     Downloaded is safe for Alef to delete. The app moves, never deletes.
+     The folder id is resolved once per run (risk 3b: no duplicate
+     Downloaded folders). */
+  var _dlFolderIds = {};
+  function motivDownloadedFolder(parentId) {
+    if (_dlFolderIds[parentId]) return Promise.resolve(_dlFolderIds[parentId]);
+    return findVisible("name='Downloaded' and mimeType='application/vnd.google-apps.folder' and '" + parentId + "' in parents")
+      .then(function (f) {
+        if (f) return f.id;
+        return api('files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Downloaded', mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
+        }).then(function (r) { return r.id; });
+      })
+      .then(function (id) { _dlFolderIds[parentId] = id; return id; });
+  }
+  function motivMove(fileId, fromFolderId) {
+    return getToken().then(function () {
+      return motivDownloadedFolder(fromFolderId);
+    }).then(function (toId) {
+      return api('files/' + fileId + '?addParents=' + encodeURIComponent(toId) +
+        '&removeParents=' + encodeURIComponent(fromFolderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+    });
+  }
+
   function motivThumb(url) {
     if (!url) return Promise.resolve(null);
     return getToken().then(function () {
@@ -699,7 +732,7 @@ window.Sync = (function () {
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,
     /* v0.44 Fitness Motivation + v0.47 Aesthetic Collection (Drive folders) */
     motivList: motivList, motivPatch: motivPatch, motivBlob: motivBlob,
-    motivThumb: motivThumb, motivUpload: motivUpload,
+    motivThumb: motivThumb, motivUpload: motivUpload, motivMove: motivMove,
     motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
