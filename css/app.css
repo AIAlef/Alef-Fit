@@ -1328,3 +1328,21 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--surface2); color: var(--text);
 }
+
+/* ==== v0.56: compact task sheet ==== */
+.td-sheet .td-title-in { padding: 0 0 1px; }   /* title → priority: hairline gap */
+.td-sheet .td-prio-row { margin: 0 0 8px; }
+.tds-hchips { margin-left: 8px; display: inline-flex; gap: 6px; vertical-align: middle; }
+.tds-hchips .chip { padding: 2px 9px; line-height: 1.4; }
+.td-cal-btn { margin-left: auto; }
+.td-cal-btn.on { color: var(--accent); background: var(--accent-soft); }
+.td-sched-row { width: 100%; display: flex; gap: 8px; margin-top: 4px; }
+.td-sched-row[hidden] { display: none; }
+.td-fold { margin: 0 0 6px; }
+.td-fold-h { background: none; border: 0; padding: 2px 0; color: inherit; font: inherit; font-size: .78rem; font-weight: 700; letter-spacing: .05em; cursor: pointer; }
+.td-fold .td-prio-lbl { display: none; }
+.td-fold [hidden] { display: none; }
+.td-note-head { display: flex; align-items: center; }
+.td-note-head .td-note-max { margin-left: auto; }
+.td-sheet .td-note { min-height: 14em; }
+.td-note-full { height: 72vh; min-height: 300px; resize: none; width: 100%; box-sizing: border-box; }

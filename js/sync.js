@@ -647,7 +647,43 @@ window.Sync = (function () {
   /* (v0.53 Schedules calendar API removed in v0.55 — AwesomeCalendar
      owns the work calendar; the app never calls Google Calendar.) */
 
+  /* ---- v0.57 A3: elective archive mirror — a vault-free full backup
+     into My Drive › Alef.Fit › Archives, keeping the newest 3. ---- */
+  function ensureArchiveFolder() {
+    return ensureShareFolder().then(function (pid) {
+      return findVisible("name='Archives' and mimeType='application/vnd.google-apps.folder' and '" + pid + "' in parents")
+        .then(function (f) {
+          if (f) return f.id;
+          return api('files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Archives', mimeType: 'application/vnd.google-apps.folder', parents: [pid] })
+          }).then(function (r) { return r.id; });
+        });
+    });
+  }
+  function mirrorBackup(name, obj) {
+    return getToken().then(ensureArchiveFolder).then(function (fid) {
+      return findVisible("name='" + name + "' and '" + fid + "' in parents")
+        .then(function (ex) { return uploadJson(name, ex ? ex.id : null, obj, fid); })
+        .then(function () {
+          return api('files?q=' + encodeURIComponent("name contains 'AFbak-' and '" + fid + "' in parents and trashed=false") +
+            '&fields=files(id,name,createdTime)&pageSize=50');
+        })
+        .then(function (r) {
+          var fs = (r.files || []).slice().sort(function (a, b) {
+            return String(b.createdTime || '').localeCompare(String(a.createdTime || ''));
+          });
+          return Promise.all(fs.slice(3).map(function (f) {
+            /* raw: a DELETE answers 204 with an empty body */
+            return api('files/' + f.id, { method: 'DELETE', raw: true }).catch(function () { /* keep it */ });
+          }));
+        });
+    });
+  }
+
   return {
+    mirrorBackup: mirrorBackup,
     syncNow: syncNow, autoInit: autoInit, autoTouch: autoTouch,
     /* v0.31 instant sync: header button + pull-on-open (Part D) */
     claudeRoundTrip: claudeRoundTrip, claudeAutoRefresh: claudeAutoRefresh,

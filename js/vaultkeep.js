@@ -10,7 +10,7 @@
 
 window.VaultKeep = (function () {
 
-  var CURRENT_NAME = 'A-FiT-DD-current.AFdd';
+  var CURRENT_NAME = 'AFvault-current.AFdd'; /* v0.57: Alef's short scheme (was A-FiT-DD-current) */
 
   /* ---- CRC32 (zip standard) ---- */
   var _crcT = null;
@@ -119,9 +119,12 @@ window.VaultKeep = (function () {
   function pad2(n) { return String(n).padStart(2, '0'); }
   function fmtSerial(n) { return String(n).padStart(4, '0'); }
   function datedName(serial, d) {
+    /* v0.57: Alef's short scheme AFvault-DDMMYY.AFdd — one file per day
+       (a same-day re-backup overwrites); the serial stays in the log and
+       inside the zip, it just left the filename. */
     d = d || new Date();
-    return 'A-FiT-DD-' + pad2(d.getDate()) + pad2(d.getMonth() + 1) + d.getFullYear() +
-      '-' + fmtSerial(serial) + '.AFdd';
+    return 'AFvault-' + pad2(d.getDate()) + pad2(d.getMonth() + 1) +
+      String(d.getFullYear()).slice(2) + '.AFdd';
   }
 
   /* ---- meta ---- */
@@ -171,16 +174,24 @@ window.VaultKeep = (function () {
         Native.canSaveFiles && Native.canSaveFiles()) {
       return Native.saveBase64(filename, bytesToB64(bytes));
     }
+    /* v0.57 C4: UI.download now says whether it actually wrote anything */
     try {
-      UI.download(filename, bytes, 'application/zip');
-      return Promise.resolve('download');
+      return Promise.resolve(UI.download(filename, bytes, 'application/zip') ? 'download' : null);
     } catch (e) { return Promise.resolve(null); }
   }
 
   /* ---- one-stop dated backup: build → zip → save → record.
      Resolves { filename, serial, where, bytes }. Any backup (popup button
-     OR the tier-4 Full backup hook) resets the 30-day timer. ---- */
+     OR the Full backup hook) resets the 30-day timer.
+     v0.57 C4: a FAILED save REJECTS — no serial burn, no timer reset, no
+     log entry claiming a file that does not exist. A second call while
+     one runs also rejects (two backups used to collide on one serial). */
+  var _bkBusy = false;
   function backupNow() {
+    if (_bkBusy) return Promise.reject(new Error('Vault backup already running'));
+    _bkBusy = true;
+    function done(r) { _bkBusy = false; return r; }
+    function fail(e) { _bkBusy = false; throw e; }
     return meta('vaultSerial').then(function (cur) {
       var serial = (cur || 0) + 1;
       return payload(serial).then(function (j) {
@@ -188,6 +199,8 @@ window.VaultKeep = (function () {
       }).then(function (bytes) {
         var fn = datedName(serial, new Date());
         return save(fn, bytes).then(function (where) {
+          if (!where) throw new Error('Vault backup NOT saved — ' +
+            ((window.Native && Native.lastSaveError && Native.lastSaveError()) || 'nothing was written'));
           var now = Date.now();
           return meta('vaultBackupLog').then(function (log) {
             log = log || [];
@@ -202,7 +215,7 @@ window.VaultKeep = (function () {
           });
         });
       });
-    });
+    }).then(done, fail);
   }
 
   function markUsb(serial) {

@@ -47,6 +47,7 @@ var DB = (function () {
     allDayAlertTime: '09:00',
     allDayWhenNoTime: true,
     saveToPhotos: true,
+    mirrorIntervalDays: 30,     // v0.57 A3: red "mirror overdue" after this many days
     imageQuality: 'original',   // original | normal | low
     mediaSize: 'm',             // s | m | l (device-local)
     bgTheme: 'carbon',          // carbon | steel | midnight | ember | forest | none
@@ -702,7 +703,9 @@ var DB = (function () {
         if (s === 'todos' && !withVault) rows = rows.filter(function (r) { return r.cat !== 'vault'; }); /* Vault stays local unless the LOCAL full backup asks */
         if (s === 'meta') {
           rows = rows.filter(function (r) {
-            if (r.key === 'gdriveRefreshToken' || r.key === 'undoSnapshot') return false;
+            /* v0.57 C5: notifLog can carry Vault task titles — it never
+               leaves the device in ANY export */
+            if (r.key === 'gdriveRefreshToken' || r.key === 'undoSnapshot' || r.key === 'notifLog') return false;
             /* v0.52: vault* stamps (serial, backup log w/ filenames) stay
                off the cloud too — only the LOCAL full backup carries them */
             if (!withVault && r.key.indexOf('vault') === 0) return false;
@@ -1150,14 +1153,20 @@ var DB = (function () {
            (one-shot: the schedule then clears). */
         if (t.startDate && t.startDate <= today) {
           var tm = t.startTime || '08:00';
-          if (t.cat !== 'today') t.cat = 'today';
+          /* v0.57 C1: only WRITE when something actually changed — the old
+             unconditional push re-stamped a waiting task every 20 s tick,
+             starving the auto-sync debounce and letting this device
+             overwrite real edits from the other seat in the merge. */
+          var moved = false;
+          if (t.cat !== 'today') { t.cat = 'today'; moved = true; }
           if (t.startDate < today || tm <= hm) {
             t.now = true;
             t.nowAt = null;
             t.startDate = null;
             t.startTime = null;
+            moved = true;
           }
-          changed.push(t);
+          if (moved) changed.push(t);
           return;
         }
         /* v0.40: same-day hour tag → Now */

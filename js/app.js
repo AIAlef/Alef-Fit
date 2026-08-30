@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.55.0';
+var APP_VERSION = '0.57.0';
 
 var App = (function () {
 
@@ -93,7 +93,10 @@ var App = (function () {
     });
     DB.all('todos').then(function (todos) {
       todos.forEach(function (t) {
-        if (t.done || !t.dueDate) return;
+        /* v0.57 C5: Vault entries never surface in notifications — a
+           toast/notification would put the private title on screen AND
+           into the notification log */
+        if (t.done || !t.dueDate || t.cat === 'vault') return;
         var alertAt = alertTime(t);
         if (!alertAt) return;
         var diff = alertAt.getTime() - now.getTime();

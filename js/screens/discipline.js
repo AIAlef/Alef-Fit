@@ -1042,6 +1042,51 @@ Screens.discipline = (function () {
     });
   }
 
+  /* v0.56: default video cover — decode the LOCAL copy and grab an early
+     frame (~10% in, max 1 s, so the cover is not a black lead-in). Never
+     rejects: any decode problem resolves null and the ▶ placeholder stays. */
+  function thumbFromVideoBuf(buf, mime) {
+    return new Promise(function (resolve) {
+      var url = null;
+      try { url = URL.createObjectURL(new Blob([buf], { type: mime || 'video/mp4' })); } catch (e) { return resolve(null); }
+      var v = document.createElement('video');
+      var done = false;
+      var to = setTimeout(function () { finish(null); }, 6000);
+      function finish(d) {
+        if (done) return;
+        done = true;
+        clearTimeout(to);
+        try { URL.revokeObjectURL(url); } catch (e2) { /* ok */ }
+        resolve(d);
+      }
+      function grab() {
+        if (done) return;
+        try {
+          var w = v.videoWidth, h = v.videoHeight;
+          if (!w || !h) { finish(null); return; }
+          var scale = Math.min(1, 480 / w);
+          var cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round(w * scale));
+          cv.height = Math.max(1, Math.round(h * scale));
+          cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+          finish(cv.toDataURL('image/jpeg', 0.75));
+        } catch (e) { finish(null); }
+      }
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.addEventListener('loadeddata', function () {
+        try { v.currentTime = Math.min(1, (v.duration || 1) * 0.1); } catch (e) { /* frame 0 then */ }
+        setTimeout(grab, 400); /* some WebViews never fire seeked */
+      });
+      v.addEventListener('seeked', grab);
+      v.addEventListener('error', function () { finish(null); });
+      try { v.src = url; } catch (e) { finish(null); }
+    });
+  }
+  /* cover makers, module-level so the regression suite can stub them */
+  var MK_THUMB = { img: thumbFromBuf, vid: thumbFromVideoBuf };
+
   /* v0.49: image-viewer zoom — mouse wheel, two-finger pinch, tap toggles
      1×/2×. Zoomed image pans with native overlay scrolling. */
   function ivZoom(ov, v) {
@@ -1470,7 +1515,41 @@ Screens.discipline = (function () {
         stored = {};
         keys.forEach(function (k) { stored[k] = 1; });
         drawBody();
+        fillLocalThumbs();
       }).catch(drawBody);
+    }
+    /* v0.56: default covers from the LOCAL copies — a stored video with no
+       cover gets an early-frame thumbnail, a stored image shows itself.
+       Runs quietly after each draw; made covers persist via mvSave, and
+       the 📷 camera capture (v0.45) still replaces a video cover any time. */
+    var _thumbJob = false, _thumbTried = {};
+    function fillLocalThumbs() {
+      if (_thumbJob) return;
+      var todo = items.filter(function (it) {
+        return !it.thumb && stored[it.id] && it.rating !== 'X' && !_thumbTried[it.id];
+      });
+      if (!todo.length) return;
+      _thumbJob = true;
+      var made = 0;
+      var chain = Promise.resolve();
+      todo.forEach(function (it) {
+        chain = chain.then(function () {
+          if (it.thumb) return null;
+          _thumbTried[it.id] = 1;
+          return DB.get('motivVideos', it.id).then(function (row) {
+            if (!row || !row.buf) return null;
+            var mk = cfg.mime === 'image/' ? MK_THUMB.img(row.buf, row.type) : MK_THUMB.vid(row.buf, row.type);
+            return mk.then(function (d) {
+              if (d) { it.thumb = d; made++; }
+            });
+          }).catch(function () { /* keep the ▶ placeholder */ });
+        });
+      });
+      chain.then(function () {
+        _thumbJob = false;
+        if (!made) return;
+        return save().then(function () { if (wrap.isConnected) draw(); });
+      });
     }
     function drawBody() {
       wrap.innerHTML = '';
@@ -1768,7 +1847,23 @@ Screens.discipline = (function () {
     });
     prioRow.appendChild(badges);
     prioRow.appendChild(prioVal);
-    body.appendChild(prioRow);
+    /* v0.56: the Vault detail is an INFO page (Alef stores developed
+       information there) — Priority and Tags fold shut by default, a
+       small header taps them open. Other lists keep the rows visible. */
+    var isVault = t.cat === 'vault';
+    function foldable(label, rowEl) {
+      var box = UI.el('<div class="td-fold"></div>');
+      var head = UI.el('<button type="button" class="td-fold-h sub">' + label + ' <span class="td-fold-a">▸</span></button>');
+      rowEl.hidden = true;
+      head.addEventListener('click', function () {
+        rowEl.hidden = !rowEl.hidden;
+        head.querySelector('.td-fold-a').textContent = rowEl.hidden ? '▸' : '▾';
+      });
+      box.appendChild(head);
+      box.appendChild(rowEl);
+      return box;
+    }
+    body.appendChild(isVault ? foldable('Priority', prioRow) : prioRow);
 
     /* tags */
     var tagWrap = UI.el('<div class="td-tags-row"><span class="td-prio-lbl">Tags</span><div class="td-tagrow"></div></div>');
@@ -1827,27 +1922,20 @@ Screens.discipline = (function () {
           dirt();
           refreshTags();
         });
-        row.appendChild(dateIn);
-        row.appendChild(nowAtIn);
-        var lockTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.locked ? ' on' : '') + '">' + (t.locked ? '🔒 Protected' : '🔓 Protect') + '</button>');
-        lockTg.addEventListener('click', function () {
-          t.locked = !t.locked;
-          dirt();
-          lockTg.classList.toggle('on', t.locked);
-          lockTg.textContent = t.locked ? '🔒 Protected' : '🔓 Protect';
+        /* v0.56: the two inputs hide behind a small calendar icon pushed
+           to the far right of the Now row — tap to open; the icon lights
+           while a date is set. (🔒/🤖 moved to the sheet's top bar.) */
+        var calBtn = UI.el('<button type="button" class="btn-icon sm td-cal-btn' + (t.startDate ? ' on' : '') + '" aria-label="Schedule date and time">' + UI.icon('calendar') + '</button>');
+        calBtn.addEventListener('click', function () {
+          _schedOpen = !_schedOpen;
+          schedRow.hidden = !_schedOpen;
         });
-        row.appendChild(lockTg);
-        if ((DB.getSettings() || {}).claudeShareOn && t.cat !== 'vault') {
-          /* per-task Claude share: shared by default, tap to hide (noShare) */
-          var aiTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.noShare ? '' : ' on') + '">' + (t.noShare ? '🤖 Hidden' : '🤖 Shared') + '</button>');
-          aiTg.addEventListener('click', function () {
-            t.noShare = !t.noShare;
-            dirt();
-            aiTg.classList.toggle('on', !t.noShare);
-            aiTg.textContent = t.noShare ? '🤖 Hidden' : '🤖 Shared';
-          });
-          row.appendChild(aiTg);
-        }
+        row.appendChild(calBtn);
+        var schedRow = UI.el('<div class="td-sched-row"></div>');
+        schedRow.hidden = !_schedOpen;
+        schedRow.appendChild(dateIn);
+        schedRow.appendChild(nowAtIn);
+        row.appendChild(schedRow);
         var add = UI.el('<button type="button" class="chip td-addtag">+ Add tags</button>');
         add.addEventListener('click', function () {
           tagPicker(t.tags, function (sel) {
@@ -1861,8 +1949,9 @@ Screens.discipline = (function () {
         });
       });
     }
+    var _schedOpen = false; /* v0.56: calendar icon toggles the date+time row */
     refreshTags();
-    body.appendChild(tagWrap);
+    body.appendChild(isVault ? foldable('Tags', tagWrap) : tagWrap);
 
     /* SUBTASKS — count = undone / done */
     var subsWrap = UI.el('<div class="td-subs"><div class="td-subs-head">SUBTASKS<span class="td-sub-count"></span></div><div class="td-sub-list"></div></div>');
@@ -1994,18 +2083,20 @@ Screens.discipline = (function () {
     drawSubs();
     body.appendChild(subsWrap);
 
-    /* note — v0.50: word wrap + auto-grow per row (gesture scroll past the
-       cap); a long note STARTS minimized to 3 rows, tap to expand */
-    body.appendChild(UI.el('<div class="td-subs-head">NOTE</div>'));
-    var noteIn = UI.el('<textarea class="td-note" placeholder="Add your notes...."></textarea>');
+    /* note — v0.50 word wrap + auto-grow. v0.56: the preview panel is
+       ~10 rows tall, and the headline carries a fullscreen-edit icon at
+       the far right (a very long note still opens minimized to those 10
+       rows and grows on tap). */
+    var noteHead = UI.el('<div class="td-subs-head td-note-head">NOTE<button type="button" class="btn-icon sm td-note-max" aria-label="Edit note full screen">' + UI.icon('expand') + '</button></div>');
+    body.appendChild(noteHead);
+    var noteIn = UI.el('<textarea class="td-note" rows="10" placeholder="Add your notes...."></textarea>');
     noteIn.value = t.note || '';
     noteIn.addEventListener('input', function () {
       dirt();
       if (!noteIn.classList.contains('td-note-min')) autosize(noteIn, 0.45);
     });
-    if ((t.note || '').split('\n').length > 3 || (t.note || '').length > 220) {
+    if ((t.note || '').split('\n').length > 10 || (t.note || '').length > 800) {
       noteIn.classList.add('td-note-min');
-      noteIn.rows = 3;
       var expandNote = function () {
         if (!noteIn.classList.contains('td-note-min')) return;
         noteIn.classList.remove('td-note-min');
@@ -2013,10 +2104,22 @@ Screens.discipline = (function () {
       };
       noteIn.addEventListener('focus', expandNote);
       noteIn.addEventListener('click', expandNote);
-    } else {
-      setTimeout(function () { autosize(noteIn, 0.45); }, 0);
     }
     body.appendChild(noteIn);
+    noteHead.querySelector('.td-note-max').addEventListener('click', function () {
+      /* full-screen note editor — edits sync live into the sheet, so
+         closing the overlay any way keeps the text */
+      var big = UI.el('<textarea class="td-note td-note-full" placeholder="Add your notes...."></textarea>');
+      big.value = noteIn.value;
+      big.addEventListener('input', function () {
+        noteIn.value = big.value;
+        dirt();
+      });
+      if (roMode) big.disabled = true;
+      var refN = UI.modal('Note', big, [{ label: 'Done', primary: true }]);
+      refN.root.querySelector('.modal').classList.add('modal-full');
+      setTimeout(function () { if (!roMode) big.focus(); }, 60);
+    });
 
     /* v0.48: export icon in the sheet's top-right — exports THIS task,
        including edits typed but not yet saved */
@@ -2057,6 +2160,8 @@ Screens.discipline = (function () {
       titleIn.disabled = true;
       noteIn.disabled = true;
       Array.prototype.forEach.call(body.querySelectorAll('button, input'), function (el2) { el2.disabled = true; });
+      /* v0.56: the Vault fold headers stay tappable in read-only mode */
+      Array.prototype.forEach.call(body.querySelectorAll('.td-fold-h'), function (el2) { el2.disabled = false; });
       var refRo = UI.modal('Task 🔒', body, [
         { label: 'Close' },
         {
@@ -2107,6 +2212,29 @@ Screens.discipline = (function () {
     hs.addEventListener('click', function () { doSave(ref.close); });
     ref.root.querySelector('.modal-title').appendChild(hs);
     saveBtns.push(hs);
+    /* v0.56: 🔒 Protect + 🤖 Share moved OUT of the Tags row into the
+       sheet's top bar, right after the "Task" title (small gap) */
+    var hchips = UI.el('<span class="tds-hchips"></span>');
+    var lockTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.locked ? ' on' : '') + '" title="Protect this task">' + (t.locked ? '🔒' : '🔓') + '</button>');
+    lockTg.addEventListener('click', function () {
+      t.locked = !t.locked;
+      dirt();
+      lockTg.classList.toggle('on', t.locked);
+      lockTg.textContent = t.locked ? '🔒' : '🔓';
+    });
+    hchips.appendChild(lockTg);
+    if ((DB.getSettings() || {}).claudeShareOn && t.cat !== 'vault') {
+      /* per-task Claude share: shared by default, tap to hide (noShare) */
+      var aiTg = UI.el('<button type="button" class="chip td-lock-chip' + (t.noShare ? '' : ' on') + '" title="' + (t.noShare ? 'Hidden from Claude' : 'Shared with Claude') + '">🤖</button>');
+      aiTg.addEventListener('click', function () {
+        t.noShare = !t.noShare;
+        dirt();
+        aiTg.classList.toggle('on', !t.noShare);
+        aiTg.title = t.noShare ? 'Hidden from Claude' : 'Shared with Claude';
+      });
+      hchips.appendChild(aiTg);
+    }
+    ref.root.querySelector('.modal-title').appendChild(hchips);
     addExportBtn(ref);
     /* tapping outside with unsaved changes → save / discard, never silent loss */
     ref.root.addEventListener('click', function (e) {
@@ -3122,7 +3250,11 @@ Screens.discipline = (function () {
           a.label = body.querySelector('#af-label').value.trim();
           a.days = sel.sort();
           DB.put('alarms', a).then(function () {
-            askNotifPermission();
+            /* v0.57 C7: this called an undefined helper — the ReferenceError
+               froze the modal and the OS alarms were never (re)scheduled */
+            if ('Notification' in window && Notification.permission === 'default') {
+              try { Notification.requestPermission(); } catch (e) { /* ok */ }
+            }
             resyncNativeAlarms();
             UI.toast('Saved'); close(); onSaved && onSaved();
           });
@@ -3137,5 +3269,6 @@ Screens.discipline = (function () {
 
   return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
     _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport,
-    _tomorrowISO: tomorrowISO, _tdMovePlan: tdMovePlan };
+    _tomorrowISO: tomorrowISO, _tdMovePlan: tdMovePlan,
+    _thumbFromVideoBuf: thumbFromVideoBuf, _mkThumb: MK_THUMB };
 })();

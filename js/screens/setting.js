@@ -123,67 +123,94 @@ Screens.setting = (function () {
       : (window.Native && Native.isNative && Native.isNative()
         ? '⚠ Update the app (apk-latest) to enable saving files.'
         : 'Files go to the browser\'s Downloads folder.');
-    bk.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Four backups, smallest to everything. ' +
-      whereTxt + ' The Import button below restores any of them — it detects the file type.</div>'));
+    bk.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Lean backup: TWO buttons cover everything. ' +
+      whereTxt + ' Import restores ANY backup file — old long-named files included (the type is detected).</div>'));
     function bkBtn(label, primary) {
       return UI.el('<button class="btn ' + (primary ? 'btn-primary ' : '') + 'btn-block" style="margin-bottom:8px">' +
         UI.icon('download') + ' ' + label + '</button>');
     }
-    /* 1 — Google Drive sync info (connection settings; includes the secret) */
-    var bk1 = bkBtn('1 · Google Drive sync info');
+    /* v0.57: Alef's short filename scheme — AF family + DDMMYY */
+    function shortDate() {
+      var d = new Date();
+      function p2(n) { return String(n).padStart(2, '0'); }
+      return p2(d.getDate()) + p2(d.getMonth() + 1) + String(d.getFullYear()).slice(2);
+    }
+    /* Google Drive sync info (Advanced fold; includes the secret) */
+    var bk1 = bkBtn('Google Drive sync info');
     bk1.addEventListener('click', function () {
       DB.exportSyncInfo().then(function (data) {
-        UI.download('alef-fit-1-sync-info-' + DB.todayISO() + '.json', JSON.stringify(data, null, 2));
+        UI.download('AFinfo-' + shortDate() + '.json', JSON.stringify(data, null, 2));
       });
     });
-    bk.appendChild(bk1);
-    /* 2 — Vault backup (S26 only). v0.52: goes through VaultKeep — the
-       dated .AFdd, serial bump, history entry, 30-day timer reset. */
+    /* Vault backup (S26 only) — dated .AFdd, serial, 30-day timer.
+       v0.57 C3/C4: guarded against double-tap; failure reports honestly. */
+    var bk2 = null;
     if ((s.deviceId || '') !== 'PC') {
-      var bk2 = bkBtn('2 · Vault backup (.AFdd)');
+      bk2 = bkBtn('Vault backup (.AFdd)');
       bk2.addEventListener('click', function () {
+        if (bk2.disabled) return;
+        bk2.disabled = true;
         VaultKeep.backupNow().then(function (r) {
+          bk2.disabled = false;
           UI.toast('Vault backup #' + VaultKeep.fmtSerial(r.serial) + ' — ' + r.filename);
-        }).catch(function (e2) { UI.toast(String(e2 && e2.message || e2)); });
+        }).catch(function (e2) {
+          bk2.disabled = false;
+          UI.toast('⚠ ' + String(e2 && e2.message || e2));
+        });
       });
-      bk.appendChild(bk2);
     }
-    /* 3 — Alef.do tasks, Vault excluded (tier 2 owns it) */
-    var bk3 = bkBtn('3 · Alef.do tasks (no Vault)');
+    /* Alef.do tasks only (Advanced fold) */
+    var bk3 = bkBtn('Alef.do tasks (no Vault)');
     bk3.addEventListener('click', function () {
       DB.exportTodoBackup().then(function (data) {
-        UI.download('alef-fit-3-alefdo-tasks-' + DB.todayISO() + '.json', JSON.stringify(data));
+        UI.download('AFtodo-' + shortDate() + '.json', JSON.stringify(data));
       });
     });
-    bk.appendChild(bk3);
-    /* 4 — everything incl. media. v0.49: the LOCAL full backup now carries
-       the Vault too (cloud sync files still never do). */
-    var bk4 = bkBtn('4 · Full backup (all data + Vault)', true);
+    /* Full backup — everything incl. media. v0.49: the LOCAL full backup
+       carries the Vault too (cloud sync files still never do). */
+    var bk4 = bkBtn('Full backup (all data + Vault)', true);
     /* v0.53: save details live UNDER the button, not in popups/toasts —
        persistent "current backup" status + live progress while writing */
     var bk4Status = UI.el('<div class="sub bk4-status" style="margin:2px 0 8px"></div>');
     function fmtBk4(info) {
       if (!info) return 'No full backup made on this device yet.';
       if (!info.ok) {
-        return '⚠ Last attempt ' + new Date(info.at).toLocaleString() + ' FAILED — ' +
+        return '⚠ Last attempt ' + new Date(info.at).toLocaleString('en-GB') + ' FAILED — ' +
           (info.error || 'unknown error');
       }
-      return '✓ Current backup: ' + new Date(info.at).toLocaleString() + ' · ' + info.mb + ' MB · ' +
+      return '✓ Current backup: ' + new Date(info.at).toLocaleString('en-GB') + ' · ' + info.mb + ' MB · ' +
         (info.path || 'downloaded to this browser');
+    }
+    /* v0.57 A2: staleness nudge — quiet while ≤ 7 days, red beyond */
+    var bk4Age = UI.el('<div class="sub bk4-age" style="margin:0 0 8px"></div>');
+    function paintAge(info) {
+      if (!info || !info.ok) {
+        bk4Age.textContent = 'No full backup on this device yet — make one.';
+        bk4Age.classList.add('bk-warn');
+        return;
+      }
+      var days = Math.floor((Date.now() - info.at) / 86400000);
+      bk4Age.textContent = 'Full backup is ' + (days <= 0 ? 'from today' : days + ' day' + (days === 1 ? '' : 's') + ' old');
+      bk4Age.classList.toggle('bk-warn', days > 7);
     }
     DB.get('meta', 'fullBackupInfo').then(function (r) {
       bk4Status.textContent = fmtBk4(r && r.value);
+      paintAge(r && r.value);
     });
     bk4.addEventListener('click', function () {
+      if (bk4.disabled) return; /* v0.57 C3: two runs used to interleave into one corrupt file */
+      bk4.disabled = true;
       bk4Status.textContent = 'Preparing backup…';
       DB.exportAll({ media: 'all', vault: true }).then(function (data) {
         var text = JSON.stringify(data);
         var mb = (text.length / 1048576).toFixed(1);
-        var fname = 'alef-fit-4-full-backup-' + DB.todayISO() + '.json';
+        var fname = 'AFbak-' + shortDate() + '.json'; /* v0.57: Alef's short scheme */
         function finish(ok, path, error) {
+          bk4.disabled = false;
           var info = { at: Date.now(), ok: ok, mb: mb, path: path || null, error: error || null };
           DB.put('meta', { key: 'fullBackupInfo', value: info, updatedAt: Date.now() });
           bk4Status.textContent = fmtBk4(info);
+          paintAge(info);
           if (!ok) return;
           /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
              Vault .AFdd — serial bumps and the 30-day timer resets */
@@ -207,24 +234,26 @@ Screens.setting = (function () {
             else finish(false, null, (Native.lastSaveError && Native.lastSaveError()) || 'could not write the file');
           });
         } else {
-          UI.download(fname, text);
-          finish(true, null);
+          /* v0.57 C4: UI.download says whether anything was written */
+          if (UI.download(fname, text)) finish(true, null);
+          else finish(false, null, 'file saving unavailable — update the app (apk-latest)');
         }
       }).catch(function (err) {
+        bk4.disabled = false;
         bk4Status.textContent = '⚠ Backup failed — ' + String((err && err.message) || err);
       });
     });
     bk.appendChild(bk4);
     bk.appendChild(bk4Status);
-    /* device transfer (advanced): small PC <-> phone merge file */
-    bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 8px">Device transfer (advanced): sync file = all data + only media added since the last export — for manual PC ↔ phone moves.</div>'));
+    bk.appendChild(bk4Age);
+    if (bk2) bk.appendChild(bk2);
+    /* device transfer moved into the Advanced fold (v0.57 ruling 8) */
     var expSyncBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
     expSyncBtn.addEventListener('click', function () {
       DB.exportAll({ media: 'since' }).then(function (data) {
-        UI.download('alef-fit-transfer-sync-' + DB.todayISO() + '.json', JSON.stringify(data));
+        UI.download('AFtrans-' + shortDate() + '.json', JSON.stringify(data));
       });
     });
-    bk.appendChild(expSyncBtn);
     /* v0.35.3: tell Alef WHERE the backup files live when importing */
     bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 6px">Import: pick the backup file from ' +
       (canFs ? '<b>S26 › Documents › S26-Alef-Fit</b>' : 'your Downloads folder') + '.</div>'));
@@ -325,7 +354,7 @@ Screens.setting = (function () {
     DB.undoInfo().then(function (u) {
       if (u) {
         undoBtn.style.display = '';
-        undoBtn.textContent = 'Undo last sync/merge (' + new Date(u.at).toLocaleString() + ')';
+        undoBtn.textContent = 'Undo last sync/merge (' + new Date(u.at).toLocaleString('en-GB') + ')';
       }
     });
     undoBtn.addEventListener('click', function () {
@@ -339,6 +368,71 @@ Screens.setting = (function () {
       });
     });
     bk.appendChild(undoBtn);
+
+    /* ---- v0.57 A3: elective Drive mirror (Alef's ruling 2) ---- */
+    bk.appendChild(UI.el('<div class="sub" style="margin:12px 0 6px"><b>Drive mirror</b> — uploads a vault-free full backup to My Drive › Alef.Fit › Archives (keeps the newest 3).</div>'));
+    var mirBtn = UI.el('<button class="btn btn-block" style="margin-bottom:6px">' + UI.icon('upload') + ' Mirror backup to Drive</button>');
+    var mirStat = UI.el('<div class="sub bk-mir-stat"></div>');
+    var mirRow = UI.el('<div class="sub" style="margin:4px 0 0">Remind after <input type="number" id="bk-mir-int" min="1" max="365" style="width:58px"> days without a mirror</div>');
+    mirRow.querySelector('#bk-mir-int').value = s.mirrorIntervalDays || 30;
+    mirRow.querySelector('#bk-mir-int').addEventListener('change', function (e) {
+      var v = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 30));
+      e.target.value = v;
+      DB.saveSettings({ mirrorIntervalDays: v }).then(paintMir);
+    });
+    function paintMir() {
+      DB.get('meta', 'archiveMirrorAt').then(function (r) {
+        var at = r && r.value;
+        var iv = (DB.getSettings() || {}).mirrorIntervalDays || 30;
+        if (!at) {
+          mirStat.textContent = 'No Drive mirror yet.';
+          mirStat.classList.add('bk-warn');
+          return;
+        }
+        var days = Math.floor((Date.now() - at) / 86400000);
+        mirStat.textContent = 'Last mirror upload: ' + new Date(at).toLocaleString('en-GB') +
+          ' (' + days + ' day' + (days === 1 ? '' : 's') + ' ago)';
+        mirStat.classList.toggle('bk-warn', days > iv);
+      });
+    }
+    paintMir();
+    mirBtn.addEventListener('click', function () {
+      if (mirBtn.disabled) return;
+      if (!Sync.hasClientId || !Sync.hasClientId()) { UI.toast('Connect Google first — Setting → Share with Claude → Connect'); return; }
+      mirBtn.disabled = true;
+      mirStat.classList.remove('bk-warn');
+      mirStat.textContent = 'Building the mirror file…';
+      DB.exportAll({ media: 'all' }).then(function (data) { /* vault EXCLUDED — never rides the cloud */
+        var name = 'AFbak-' + shortDate() + '.json';
+        mirStat.textContent = 'Uploading ' + name + ' to Drive…';
+        return Sync.mirrorBackup(name, data);
+      }).then(function () {
+        mirBtn.disabled = false;
+        return DB.put('meta', { key: 'archiveMirrorAt', value: Date.now() }).then(paintMir);
+      }).catch(function (e3) {
+        mirBtn.disabled = false;
+        mirStat.textContent = '⚠ Mirror failed — ' + String((e3 && e3.message) || e3).slice(0, 140);
+        mirStat.classList.add('bk-warn');
+      });
+    });
+    bk.appendChild(mirBtn);
+    bk.appendChild(mirStat);
+    bk.appendChild(mirRow);
+
+    /* ---- Advanced (rare) exports fold away — v0.57 ruling 8 ---- */
+    var advHead = UI.el('<button type="button" class="btn btn-block" style="margin-top:12px">Advanced backups ▸</button>');
+    var advBox = UI.el('<div class="hidden"></div>');
+    advHead.addEventListener('click', function () {
+      advBox.classList.toggle('hidden');
+      advHead.textContent = advBox.classList.contains('hidden') ? 'Advanced backups ▸' : 'Advanced backups ▾';
+    });
+    bk.appendChild(advHead);
+    advBox.appendChild(UI.el('<div class="sub" style="margin:6px 0">Rarely needed — the two buttons above cover everything. These export smaller slices.</div>'));
+    advBox.appendChild(bk1);
+    advBox.appendChild(bk3);
+    advBox.appendChild(UI.el('<div class="sub" style="margin:2px 0 8px">Device transfer: all data + media added since the last export — for manual PC ↔ phone moves.</div>'));
+    advBox.appendChild(expSyncBtn);
+    bk.appendChild(advBox);
     var usage = UI.el('<div class="sub" style="margin-top:10px">Storage: …</div>');
     DB.storageEstimate().then(function (est) {
       if (est) usage.textContent = 'Storage used: ' + (est.usage / 1048576).toFixed(1) + ' MB of ' + (est.quota / 1048576 / 1024).toFixed(1) + ' GB available';
@@ -353,7 +447,7 @@ Screens.setting = (function () {
     /* v0.39: succession — retired banner + take-back / claim button */
     if (DB.isSuperseded && DB.isSuperseded()) {
       var mc = s.mainClaim || {};
-      var when = mc.at ? new Date(mc.at).toLocaleDateString() : '';
+      var when = mc.at ? new Date(mc.at).toLocaleDateString('en-GB') : '';
       dv.appendChild(UI.el('<div class="sub su-retired">⚠ A newer ' + UI.esc(s.deviceId) +
         ' took over' + (when ? ' on ' + UI.esc(when) : '') + ' — this copy no longer writes the Claude share or schedules alarms. Data stays readable.</div>'));
     }
@@ -443,7 +537,7 @@ Screens.setting = (function () {
     var syWkBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Sync Workout (Exercise + Program)</button>');
     var syStatus = UI.el('<div class="sub" style="margin-top:8px"></div>');
     DB.get('meta', 'lastDriveSyncAt').then(function (r) {
-      if (r) syStatus.textContent = 'Last synced: ' + new Date(r.value).toLocaleString();
+      if (r) syStatus.textContent = 'Last synced: ' + new Date(r.value).toLocaleString('en-GB');
     });
     function runSync(scope) {
       if (!Sync.hasClientId()) { UI.toast('Set the Google client ID and secret first'); return; }
@@ -452,7 +546,7 @@ Screens.setting = (function () {
         .then(function (res) {
           syBtn.disabled = false; syWkBtn.disabled = false;
           var p = res.pulled || { added: 0, updated: 0, deleted: 0, conflicts: 0, mediaAdded: 0 };
-          syStatus.textContent = 'Last synced: ' + new Date().toLocaleString();
+          syStatus.textContent = 'Last synced: ' + new Date().toLocaleString('en-GB');
           UI.toast((scope === 'workout' ? 'Workout synced: ' : 'Synced: ') +
             '+' + p.added + ' / ~' + p.updated + ' / \u2212' + p.deleted +
             ' \u00b7 media \u2191' + res.mediaUp + ' \u2193' + res.mediaDown);
@@ -490,7 +584,7 @@ Screens.setting = (function () {
     function csRefreshStatus() {
       Promise.all([DB.get('meta', 'claudeShareAt'), DB.get('meta', 'claudeShareErr')]).then(function (r) {
         if (r[1] && r[1].value) csStatus.textContent = 'Last update failed: ' + r[1].value + ' — tap Re-connect Google';
-        else if (r[0]) csStatus.textContent = 'Share file updated: ' + new Date(r[0].value).toLocaleString();
+        else if (r[0]) csStatus.textContent = 'Share file updated: ' + new Date(r[0].value).toLocaleString('en-GB');
         else csStatus.textContent = '';
       });
     }
@@ -538,7 +632,7 @@ Screens.setting = (function () {
     csDetail.appendChild(cdRow);
     var ciStat = UI.el('<div class="sub" style="margin:2px 0 8px"></div>');
     DB.get('meta', 'claudeBatchAt').then(function (r) {
-      ciStat.textContent = r ? 'Last suggestions processed: ' + new Date(r.value).toLocaleString() : 'No suggestions processed yet — ask Claude in a chat to review your list.';
+      ciStat.textContent = r ? 'Last suggestions processed: ' + new Date(r.value).toLocaleString('en-GB') : 'No suggestions processed yet — ask Claude in a chat to review your list.';
     });
     csDetail.appendChild(ciStat);
     [['cs-todo', 'Alef.do — tasks', 'claudeShareTodo'],
@@ -632,10 +726,11 @@ Screens.setting = (function () {
     infoEntry('Backup guide', 'Which file, when — by situation',
       /* v0.53: rewritten per Alef — concise, one line per real situation */
       '<table class="info-table"><tr><th>Situation</th><th>What to do</th></tr>' +
-      '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>Full restore — 2 files</b>: pick the Full backup (.json) + the Vault (.AFdd). Then Connect Google → Full Sync → claim S26.</td></tr>' +
-      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>4 · Full backup</b> — the status line under the button shows the current backup; the dated Vault .AFdd writes itself too.</td></tr>' +
-      '<tr><td><b>Secure the Vault</b></td><td>The rolling mirror (A-FiT-DD-current) updates by itself. Monthly: Vault 🔒 → <b>Backup now</b> → copy the dated .AFdd to USB. The Vault NEVER rides the cloud.</td></tr>' +
-      '<tr><td><b>Device transfer</b><br>(PC ↔ phone)</td><td>Export <b>sync file</b> (small — only new media) → Import → <b>Merge</b> on the other device. Daily changes travel by <b>Sync now</b> instead.</td></tr></table>' +
+      '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>⚡ One-stop restore</b>: pick AFbak-….json + AFvault-….AFdd — sign-in, Full Sync and the S26 claim chain by themselves.</td></tr>' +
+      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>Full backup</b> — writes AFbak-….json AND the dated AFvault-….AFdd together; the lines under the button show status + age.</td></tr>' +
+      '<tr><td><b>Secure the Vault</b></td><td>The rolling mirror (AFvault-current) updates by itself. Monthly: Vault 🔒 → <b>Backup now</b> → copy the dated .AFdd to USB. The Vault NEVER rides the cloud.</td></tr>' +
+      '<tr><td><b>Long retention</b></td><td><b>Mirror backup to Drive</b> — a vault-free AFbak copy into My Drive › Alef.Fit › Archives; the line turns RED past your interval (default 30 d).</td></tr>' +
+      '<tr><td><b>Device transfer</b><br>(PC ↔ phone)</td><td>Advanced → Export <b>sync file</b> (AFtrans, small) → Import → <b>Merge</b> on the other device. Daily changes travel by <b>Sync now</b> instead.</td></tr></table>' +
       '<div class="sub" style="margin:6px 0"><b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.<br>' +
       'Files live in <b>Documents › S26-Alef-Fit</b> (phone) or Downloads (browser).</div>');
     infoEntry('Edit app text', 'Rename any label — then make it permanent',
@@ -868,15 +963,15 @@ window.RestoreFlow = (function () {
   function fmtWhen(json, file) {
     var iso = (json && (json.exportedAt || json.at)) || null;
     var d = iso ? new Date(iso) : (file && file.lastModified ? new Date(file.lastModified) : null);
-    return d ? d.toLocaleString() : '(no date)';
+    return d ? d.toLocaleString('en-GB') : '(no date)';
   }
 
   function open(onDone) {
     var picked = { full: null, vault: null };
     var body = UI.el('<div><p class="sub">Restore a new phone in ONE go — select BOTH files, then Import. ' +
       'The files live in <b>Documents › S26-Alef-Fit</b> (or Downloads / your USB copy).</p></div>');
-    var pFull = panel('1', 'Full backup', 'Tap to choose… (alef-fit-4-full-backup-YYYY-MM-DD.json)');
-    var pVault = panel('2', 'Vault backup', 'Tap to choose… (A-FiT-DD-….AFdd or vault .json)');
+    var pFull = panel('1', 'Full backup', 'Tap to choose… (AFbak-DDMMYY.json — older alef-fit-4-full-backup files work too)');
+    var pVault = panel('2', 'Vault backup', 'Tap to choose… (AFvault-….AFdd — older A-FiT-DD files work too)');
     body.appendChild(pFull);
     body.appendChild(pVault);
     body.appendChild(UI.el('<p class="sub" style="margin-top:6px">Have only one of the files? Use the normal ' +

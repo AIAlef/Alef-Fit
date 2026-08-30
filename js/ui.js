@@ -90,7 +90,8 @@ var UI = (function () {
     sync: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.6-3.6M4 13a8 8 0 0 0 14.6 3.6"/><path d="M4 4v4h4M20 20v-4h-4"/></svg>',
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
     eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.2A11 11 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.1 4.1M6.6 6.6C3.8 8.5 2 12 2 12s3.5 7 10 7c1.7 0 3.3-.5 4.7-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
-    file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>'
+    file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>',
+    expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>'
   };
   function icon(name, cls) { return '<span class="icon ' + (cls || '') + '">' + (I[name] || '') + '</span>'; }
 
@@ -127,8 +128,9 @@ var UI = (function () {
     setTimeout(function () { t.classList.remove('show'); setTimeout(function () { t.remove(); }, 300); }, 2200);
   }
 
-  function modal(title, bodyEl, buttons) {
+  function modal(title, bodyEl, buttons, opts) {
     // buttons: [{label, primary, danger, onClick(close)}]
+    // opts.onDismiss: called when the dim backdrop closes the modal
     var wrap = el('<div class="modal-wrap"><div class="modal"><div class="modal-title">' + esc(title) + '</div><div class="modal-body"></div><div class="modal-btns"></div></div></div>');
     wrap.querySelector('.modal-body').appendChild(bodyEl);
     function close() { wrap.remove(); }
@@ -137,7 +139,13 @@ var UI = (function () {
       btn.addEventListener('click', function () { b.onClick ? b.onClick(close) : close(); });
       wrap.querySelector('.modal-btns').appendChild(btn);
     });
-    wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
+    wrap.addEventListener('click', function (e) {
+      if (e.target !== wrap) return;
+      close();
+      /* v0.57 C6: a backdrop dismissal must SETTLE whatever waits on the
+         dialog — an unsettled confirm() froze the one-stop restore */
+      if (opts && opts.onDismiss) opts.onDismiss();
+    });
     document.body.appendChild(wrap);
     return { close: close, root: wrap };
   }
@@ -147,7 +155,7 @@ var UI = (function () {
       modal('Confirm', el('<p>' + esc(msg) + '</p>'), [
         { label: 'Cancel', onClick: function (close) { close(); resolve(false); } },
         { label: okLabel || 'OK', danger: true, onClick: function (close) { close(); resolve(true); } }
-      ]);
+      ], { onDismiss: function () { resolve(false); } });
     });
   }
 
@@ -227,16 +235,18 @@ var UI = (function () {
 
   function download(filename, text, mime) {
     /* APK (v0.32): the WebView silently ignores <a download> — write a
-       real file into Documents/S26-Alef-Fit via the Filesystem plugin. */
+       real file into Documents/S26-Alef-Fit via the Filesystem plugin.
+       v0.57 C4: returns false when NOTHING was written, so callers can
+       stop reporting success they did not earn. */
     if (window.Native && Native.isNative && Native.isNative()) {
       if (!Native.canSaveFiles || !Native.canSaveFiles()) {
         toast('Update the app (apk-latest) to enable saving files');
-        return;
+        return false;
       }
       Native.saveText(filename, text).then(function (path) {
         toast(path ? 'Saved: ' + path : 'Could not save ' + filename);
       });
-      return;
+      return true;
     }
     var blob = new Blob([text], { type: mime || 'application/json' });
     var a = document.createElement('a');
@@ -245,6 +255,7 @@ var UI = (function () {
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    return true;
   }
 
   /* dataURL → Blob (null when malformed) */

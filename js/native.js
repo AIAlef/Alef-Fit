@@ -113,6 +113,15 @@ window.Native = (function () {
      call fails on Android ("cannot save full backup, Vault works").
      Now: big payloads stream in ~3 MB chunks via appendFile. */
   var CHUNK = 3 * 1024 * 1024;
+  /* v0.57 C2: never end a chunk on the HIGH half of a surrogate pair —
+     the bridge's utf8 conversion would turn a split emoji into �� */
+  function chunkEnd(text, want) {
+    if (want < text.length) {
+      var c = text.charCodeAt(want - 1);
+      if (c >= 0xD800 && c <= 0xDBFF) return want - 1;
+    }
+    return want;
+  }
   function saveText(filename, text, onProgress) {
     var p = fsPlugin();
     if (!p) return Promise.resolve(null);
@@ -120,26 +129,38 @@ window.Native = (function () {
     var path = SAVE_DIR + '/' + filename;
     var human = 'Documents/' + SAVE_DIR + '/' + filename;
     var total = text.length;
+    /* v0.57 C2: ATOMIC — stream into a .part file and swap it in only
+       after every chunk landed, so a failed save can never destroy the
+       previous good backup of the same name. (Very old plugin builds
+       without rename() fall back to the direct write.) */
+    var atomic = !!p.rename;
+    var target = atomic ? path + '.part' : path;
     function report(done) { if (onProgress) { try { onProgress(done, total); } catch (e) { /* ok */ } } }
-    var first = text.slice(0, CHUNK);
+    var firstEnd = chunkEnd(text, Math.min(CHUNK, total));
+    var off = firstEnd;
     var chain = p.writeFile({
-      path: path, data: first,
+      path: target, data: text.slice(0, firstEnd),
       directory: 'DOCUMENTS', encoding: 'utf8', recursive: true
-    }).then(function () { report(first.length); });
-    var off = first.length;
-    while (off < total) {
-      (function (start) {
-        var end = Math.min(start + CHUNK, total);
-        chain = chain.then(function () {
-          return p.appendFile({
-            path: path, data: text.slice(start, end),
-            directory: 'DOCUMENTS', encoding: 'utf8'
-          }).then(function () { report(end); });
-        });
-      })(off);
-      off += CHUNK;
+    }).then(function () { report(firstEnd); });
+    function step() {
+      if (off >= total) return null;
+      var end = chunkEnd(text, Math.min(off + CHUNK, total));
+      var piece = text.slice(off, end);
+      off = end;
+      return p.appendFile({
+        path: target, data: piece,
+        directory: 'DOCUMENTS', encoding: 'utf8'
+      }).then(function () { report(off); }).then(step);
     }
-    return chain.then(function () { return human; })
+    return chain.then(step).then(function () {
+      if (!atomic) return null;
+      /* replace the real file only now that the payload is complete */
+      return p.deleteFile({ path: path, directory: 'DOCUMENTS' })
+        .catch(function () { /* first save of this name */ })
+        .then(function () {
+          return p.rename({ from: target, to: path, directory: 'DOCUMENTS', toDirectory: 'DOCUMENTS' });
+        });
+    }).then(function () { return human; })
       .catch(function (err) {
         _lastSaveError = String((err && err.message) || err || 'unknown error');
         return null;

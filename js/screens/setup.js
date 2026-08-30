@@ -34,10 +34,25 @@ Screens.setup = (function () {
     var sO = UI.el('<div class="sub" style="margin-top:6px">Import Full backup + Vault, connect Google, Full Sync, become the main S26 — one flow.</div>');
     var osStage = 0; /* 0 pick files · 2 connect · 3 sync · 4 claim */
     var osBusy = false;
+    /* v0.57 (Alef's ask): when Google sign-in fails AFTER a backup import,
+       say exactly HOW to fix it — not just the raw error */
+    function authFixHint(err) {
+      var m = String((err && err.message) || err || '');
+      if (/offline|network|Failed to fetch|ERR_INTERNET/i.test(m)) {
+        return m + ' — no internet. Connect to Wi-Fi/data, then tap the button to continue.';
+      }
+      if (/invalid_client|unauthorized_client|deleted_client|invalid_grant/i.test(m)) {
+        return m + ' — the imported Google settings are STALE. Fix: manual step 1 with a NEWER AFbak/AFinfo file, then step 2. (Last resort: check the OAuth client in Google Cloud Console.)';
+      }
+      if (/access_denied|popup|cancel/i.test(m)) {
+        return m + ' — sign-in was cancelled or used the wrong account. Tap the button and approve with alefinnovation@gmail.com.';
+      }
+      return m + ' — fix: tap the button to retry Google sign-in (approve with alefinnovation@gmail.com). If it keeps failing: manual step 1 with a newer backup file, then step 2.';
+    }
     function osFail(step, err) {
       osBusy = false;
       osStage = step;
-      sO.textContent = '⚠ ' + String((err && err.message) || err);
+      sO.textContent = '⚠ ' + (step === 2 ? authFixHint(err) : String((err && err.message) || err));
       bO.textContent = '⚡ Continue one-stop — step ' + step + ' of 4';
     }
     function osConnect() {
@@ -141,7 +156,7 @@ Screens.setup = (function () {
     b2.addEventListener('click', function () {
       if (!Sync.hasClientId()) { UI.toast('Do step 1 first (client ID + secret)'); return; }
       Sync.reconnect().then(function () { s2.textContent = '✓ Connected'; UI.toast('Google connected'); })
-        .catch(function (err) { UI.toast(String(err.message || err)); });
+        .catch(function (err) { s2.textContent = '⚠ ' + authFixHint(err); }); /* v0.57: how-to-fix, not just the error */
     });
     c2.appendChild(b2); c2.appendChild(s2);
     pad.appendChild(c2);
