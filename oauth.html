@@ -36,9 +36,19 @@
     document.getElementById('code').textContent = code;
     document.getElementById('cp').addEventListener('click', function () {
       (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(function () {
-        document.getElementById('ok').innerHTML = 'Copied ✓ — now <b>switch back to Alef.Fit</b> (recent-apps or Back). ' +
-          'The code pastes itself into the box; if not, long-press the box and Paste.';
-        setTimeout(function () { try { window.close(); } catch (e) { /* tab stays — fine */ } }, 900);
+        document.getElementById('ok').innerHTML = 'Copied ✓ — jumping back to <b>Alef.Fit</b>… ' +
+          '(if nothing happens: recent-apps or Back. The code pastes itself into the box; ' +
+          'if not, long-press the box and Paste.)';
+        /* v0.63: actually RETURN to the app — an Android intent URL that
+           foregrounds the installed Alef.Fit APK (no custom scheme
+           needed; on other platforms it is a harmless no-op). */
+        setTimeout(function () {
+          try {
+            location.href = 'intent:#Intent;action=android.intent.action.MAIN;' +
+              'category=android.intent.category.LAUNCHER;package=fit.alef.app;end';
+          } catch (e) { /* stay on this page */ }
+          setTimeout(function () { try { window.close(); } catch (e2) { /* tab stays — fine */ } }, 600);
+        }, 350);
       }, function () {
         document.getElementById('ok').textContent = 'Long-press the code to copy it, then return to Alef.Fit';
       });

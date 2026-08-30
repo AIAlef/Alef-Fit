@@ -2553,24 +2553,31 @@ Screens.discipline = (function () {
         })();
         listEl.appendChild(row);
       });
-      var addRow = UI.el('<div class="td-sub-row td-sub-addrow"><input type="checkbox" disabled>' +
-        '<input type="text" class="td-sub-add" placeholder="Add a new subtask"></div>');
-      var ai = addRow.querySelector('.td-sub-add');
-      function commit() {
-        var v = ai.value.trim();
-        if (!v) return;
-        ai.value = ''; /* a trailing blur must not add it twice */
-        t.subs.push({ id: DB.uid(), title: v, done: false });
-        dirt();
-        drawSubs();
-        var next = subsWrap.querySelector('.td-sub-add');
-        if (next) next.focus();
-      }
-      ai.addEventListener('keydown', function (e) { if (e.key === 'Enter') commit(); });
-      ai.addEventListener('blur', function () { commit(); });
-      listEl.appendChild(addRow);
     }
+    /* v0.63 (Alef's ask): the add-row is PERSISTENT — it lives after the
+       rebuilt list instead of inside it, so Enter never destroys the
+       focused input. The keyboard stays open, the view stays anchored on
+       the SUBTASKS area, and the newest entry scrolls just into view
+       (block:'nearest' — no jump to the bottom of the sheet). */
+    var addRow = UI.el('<div class="td-sub-row td-sub-addrow"><input type="checkbox" disabled>' +
+      '<input type="text" class="td-sub-add" placeholder="Add a new subtask"></div>');
+    var ai = addRow.querySelector('.td-sub-add');
+    function commitAdd() {
+      var v = ai.value.trim();
+      if (!v) return;
+      ai.value = ''; /* a trailing blur must not add it twice */
+      t.subs.push({ id: DB.uid(), title: v, done: false });
+      dirt();
+      drawSubs();
+      try {
+        if (addRow.scrollIntoView) addRow.scrollIntoView({ block: 'nearest' });
+      } catch (e) { /* older WebViews */ }
+      ai.focus();
+    }
+    ai.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commitAdd(); } });
+    ai.addEventListener('blur', function () { commitAdd(); });
     drawSubs();
+    subsWrap.appendChild(addRow);
     body.appendChild(subsWrap);
 
     /* note — v0.50 word wrap + auto-grow. v0.56: the preview panel is
