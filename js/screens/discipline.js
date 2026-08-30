@@ -1192,6 +1192,114 @@ Screens.discipline = (function () {
        viewer — no ingest, no edits, no jobs, no list writes from there. */
     var isPC = (DB.getSettings() || {}).deviceId === 'PC';
     function save() { return isPC ? Promise.resolve() : mvSave(items, cfg.metaKey); }
+    /* ==== v0.61 (#84): the byte STORE behind the collection ====
+       On the S26 APK the bytes are REAL files in
+       Documents/S26-Alef-Fit/AFmedia/<sub>/<fileId><ext> — public storage
+       that SURVIVES an app uninstall/reinstall, so a new install rescans
+       the folder and needs no re-download. Web/PC keeps IndexedDB.
+       During the migration window bytes may still sit in IndexedDB —
+       reads check there first; page open moves rows out (verify-then-
+       delete). All access goes through these store* helpers. */
+    var useFiles = !isPC && !!(window.Native && Native.canMediaFiles && Native.canMediaFiles());
+    var sub = cfg.mirrorSub;
+    function fExt(it) { return it.ext || (cfg.mime === 'image/' ? '.jpg' : '.mp4'); }
+    function fName(it) { return it.id + fExt(it); }
+    function storeKeys() { /* → map id → truthy ({idb:true} and/or {size}) */
+      return DB.allKeys('motivVideos').then(function (ks) {
+        var map = {};
+        ks.forEach(function (k) { map[k] = { idb: true }; });
+        if (!useFiles) return map;
+        return Native.mediaList(sub).then(function (list) {
+          (list || []).forEach(function (f) {
+            var id = f.name.replace(/\.[A-Za-z0-9]{1,5}$/, '');
+            if (!map[id]) map[id] = {};
+            map[id].size = f.size;
+          });
+          return map;
+        });
+      });
+    }
+    function storePut(it, buf, type) {
+      var row = { id: it.id, buf: buf, type: type, name: it.name, size: buf.byteLength, savedAt: Date.now() };
+      if (!useFiles) return DB.put('motivVideos', row);
+      return Native.mediaPut(sub, fName(it), buf).then(function (okF) {
+        if (!okF) return DB.put('motivVideos', row); /* file write failed → bytes stay safe in IndexedDB */
+        return DB.del('motivVideos', it.id).catch(function () { /* no old row */ });
+      });
+    }
+    function storeGet(it) { /* → {buf, type} | null */
+      return DB.get('motivVideos', it.id).then(function (row) {
+        if (row && row.buf) return { buf: row.buf, type: row.type || it.mime };
+        if (!useFiles) return null;
+        return Native.mediaRead(sub, fName(it)).then(function (ab) {
+          return ab ? { buf: ab, type: it.mime } : null;
+        });
+      });
+    }
+    function storeUrl(it) { /* playable URL | null */
+      return DB.get('motivVideos', it.id).then(function (row) {
+        if (row && row.buf) {
+          try { return URL.createObjectURL(new Blob([row.buf], { type: row.type || it.mime || '' })); }
+          catch (e) { return null; } /* jsdom */
+        }
+        if (!useFiles) return null;
+        return Native.mediaUrl(sub, fName(it));
+      });
+    }
+    function storeDel(it) {
+      var pF = useFiles ? Native.mediaDel(sub, fName(it)) : Promise.resolve();
+      return pF.then(function () { return DB.del('motivVideos', it.id); })
+        .catch(function () { /* nothing stored */ });
+    }
+    function storeRename(it, newId) { /* staged upload got its Drive id */
+      var oldName = fName(it);
+      return DB.get('motivVideos', it.id).then(function (row) {
+        var pr = Promise.resolve();
+        if (row && row.buf) {
+          pr = DB.put('motivVideos', {
+            id: newId, buf: row.buf, type: row.type,
+            name: it.name, size: row.size, savedAt: row.savedAt || Date.now()
+          }).then(function () { return DB.del('motivVideos', it.id); });
+        }
+        return pr.then(function () {
+          if (!useFiles) return null;
+          return Native.mediaRename(sub, oldName, newId + fExt(it));
+        });
+      });
+    }
+    /* one-time move of IndexedDB bytes → files. Resumable: a row is only
+       deleted AFTER its file verified at the exact byte count; anything
+       that fails just stays in IndexedDB and retries next page open. */
+    var _migRun = false;
+    function migrateToFiles() {
+      if (!useFiles || _migRun) return;
+      _migRun = true;
+      DB.allKeys('motivVideos').then(function (ks) {
+        var mine = {};
+        items.forEach(function (it) { mine[it.id] = it; });
+        var todo = ks.filter(function (k) { return mine[k]; });
+        if (!todo.length) return;
+        var moved = 0;
+        var chain = Promise.resolve();
+        todo.forEach(function (k) {
+          chain = chain.then(function () {
+            return DB.get('motivVideos', k).then(function (row) {
+              if (!row || !row.buf) return null;
+              return Native.mediaPut(sub, fName(mine[k]), row.buf).then(function (okF) {
+                if (!okF) return null;
+                moved++;
+                return DB.del('motivVideos', k);
+              });
+            }).catch(function () { /* next one */ });
+          });
+        });
+        chain.then(function () {
+          if (!moved) return;
+          UI.toast(moved + ' ' + cfg.noun + (moved === 1 ? '' : 's') + ' moved to phone storage — they now survive app updates and reinstalls');
+          if (wrap.isConnected) draw();
+        });
+      });
+    }
     var hdr = UI.header(isPC
       ? { title: cfg.title, back: '#/discipline' }
       : {
@@ -1290,7 +1398,7 @@ Screens.discipline = (function () {
           name: p.name, rating: p.rating, isNew: true,
           state: 'stored', bytes: buf.byteLength /* v0.59: lives on the phone */
         };
-        return DB.put('motivVideos', { id: id, buf: buf, type: it.mime, name: it.name, size: buf.byteLength, savedAt: Date.now() })
+        return storePut(it, buf, it.mime)
           .then(function () {
             if (cfg.mime !== 'image/') return null;
             return thumbFromBuf(buf, it.mime).then(function (d) { it.thumb = d; });
@@ -1340,14 +1448,12 @@ Screens.discipline = (function () {
             throw eB;
           }).then(function (b) {
             return blobBuf(b).then(function (buf) {
-              return DB.put('motivVideos', {
-                id: it.id, buf: buf, type: b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
-                name: it.name, size: buf.byteLength, savedAt: Date.now()
-              }).then(function () {
-                it.state = 'stored';       /* bytes committed FIRST… */
-                it.bytes = buf.byteLength;
-                return moveToDownloaded(it); /* …then the inbox move (retry-safe) */
-              });
+              return storePut(it, buf, b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'))
+                .then(function () {
+                  it.state = 'stored';       /* bytes committed FIRST… */
+                  it.bytes = buf.byteLength;
+                  return moveToDownloaded(it); /* …then the inbox move (retry-safe) */
+                });
             });
           }).then(function () {
             job.done++;
@@ -1384,9 +1490,7 @@ Screens.discipline = (function () {
       if (run && run.active) return;
       DB.get('meta', 'gdriveRefreshToken').then(function (tok) {
         if (!(tok && tok.value)) return;
-        return DB.allKeys('motivVideos').then(function (keys) {
-          var have = {};
-          keys.forEach(function (k) { have[k] = 1; });
+        return storeKeys().then(function (have) {
           var todo = items.filter(function (it) { return it.state === 'inbox' && it.rating !== 'X' && !it.isNew && !have[it.id]; });
           var pendingMoves = items.some(function (x) { return x.state === 'stored' && !x.isNew && !x.moved; });
           if (!todo.length && !pendingMoves) return;
@@ -1416,10 +1520,10 @@ Screens.discipline = (function () {
         todo.forEach(function (it, i2) {
           chain = chain.then(function () {
             if (statEl) statEl.textContent = 'Mirroring ' + (i2 + 1) + '/' + todo.length + '…';
-            return DB.get('motivVideos', it.id).then(function (row) {
-              if (!row || !row.buf) return null;
-              return Sync.motivUpload(mvDriveName(it), it.mime || row.type, row.buf, fid).then(function (res) {
-                var want = row.buf.byteLength || row.size || 0;
+            return storeGet(it).then(function (o) {
+              if (!o || !o.buf) return null;
+              return Sync.motivUpload(mvDriveName(it), it.mime || o.type, o.buf, fid).then(function (res) {
+                var want = o.buf.byteLength || 0;
                 if (res && res.id && parseInt(res.size, 10) === want) {
                   it.mirrorId = res.id; /* verified — byte count confirmed by Drive */
                   upped++;
@@ -1452,9 +1556,7 @@ Screens.discipline = (function () {
         UI.toast('Downloading in the background… ' + run.done + '/' + run.total);
         return;
       }
-      DB.allKeys('motivVideos').then(function (keys) {
-        var have = {};
-        keys.forEach(function (k) { have[k] = 1; });
+      storeKeys().then(function (have) {
         var todo = items.filter(function (it) { return it.rating !== 'X' && !it.isNew && !have[it.id] && it.state !== 'missed'; });
         if (!todo.length) { UI.toast('All ' + cfg.noun + 's are already on this phone ✓'); return; }
         UI.confirm('Download ' + todo.length + ' ' + cfg.noun + (todo.length === 1 ? '' : 's') +
@@ -1537,9 +1639,13 @@ Screens.discipline = (function () {
         if (dups) UI.toast(dups + ' duplicate inbox file' + (dups === 1 ? '' : 's') + ' ignored — already in the collection');
         return save().then(function () {
           draw();
-          /* thumbnails after the list is on screen */
+          /* thumbnails after the list is on screen.
+             v0.62 (#90 locality): items whose BYTES live on this phone
+             skip the Drive thumbnail — fillLocalThumbs makes a better
+             cover from the local file, with no network call. */
           return Promise.all(items.map(function (it) {
             if (it.thumb || !it.thumbLink) return null;
+            if (it.state === 'stored' || stored[it.id]) return null;
             return Sync.motivThumb(it.thumbLink).then(function (d) { it.thumb = d; });
           }));
         });
@@ -1601,12 +1707,14 @@ Screens.discipline = (function () {
         document.body.appendChild(ov);
       }
       if (_mvBlobs[it.id]) return show(_mvBlobs[it.id]);
-      /* v0.46: stored copy on the phone plays first — instant + offline */
-      DB.get('motivVideos', it.id).then(function (row) {
-        if (row && row.buf) {
-          var lurl = null;
-          try { lurl = URL.createObjectURL(new Blob([row.buf], { type: row.type || 'video/mp4' })); } catch (e) { /* jsdom */ }
-          if (lurl) { _mvBlobs[it.id] = lurl; show(lurl); return; }
+      /* v0.46: stored copy on the phone plays first — instant + offline.
+         v0.61: on the APK the REAL file streams straight from disk (no
+         RAM copy) via its local URL. */
+      storeUrl(it).then(function (lurl) {
+        if (lurl && (stored[it.id] || lurl.slice(0, 5) === 'blob:')) {
+          _mvBlobs[it.id] = lurl;
+          show(lurl);
+          return;
         }
         UI.toast('Loading ' + cfg.noun + '…');
         Sync.motivBlob(it.id).then(function (b) {
@@ -1676,25 +1784,22 @@ Screens.discipline = (function () {
         var fails = 0;
         toUpload.forEach(function (it) {
           chain = chain.then(function () {
-            return DB.get('motivVideos', it.id).then(function (row) {
-              if (!row || !row.buf) throw new Error('local copy missing');
-              return Sync.motivUpload(mvDriveName(it), it.mime || row.type, row.buf, cfg.folderId())
+            return storeGet(it).then(function (o) {
+              if (!o || !o.buf) throw new Error('local copy missing');
+              return Sync.motivUpload(mvDriveName(it), it.mime || o.type, o.buf, cfg.folderId())
                 .then(function (res) {
-                  var oldId = it.id;
-                  return DB.put('motivVideos', {
-                    id: res.id, buf: row.buf, type: row.type,
-                    name: it.name, size: row.size, savedAt: row.savedAt || Date.now()
-                  }).then(function () { return DB.del('motivVideos', oldId); })
-                    .then(function () {
-                      it.id = res.id;
-                      it.isNew = false;
-                      it.origName = it.name;
-                      it.origRating = it.rating;
-                      it.drvName = mvDriveName(it);
-                      it.state = 'stored'; /* v0.59: bytes are local; the next ingest pass moves the upload to Downloaded */
-                      it.moved = false;
-                      if (res.thumbnailLink) it.thumbLink = res.thumbnailLink;
-                    });
+                  /* v0.61: the stored bytes follow the id (file rename /
+                     IndexedDB re-key) — BEFORE it.id changes */
+                  return storeRename(it, res.id).then(function () {
+                    it.id = res.id;
+                    it.isNew = false;
+                    it.origName = it.name;
+                    it.origRating = it.rating;
+                    it.drvName = mvDriveName(it);
+                    it.state = 'stored'; /* v0.59: bytes are local; the next ingest pass moves the upload to Downloaded */
+                    it.moved = false;
+                    if (res.thumbnailLink) it.thumbLink = res.thumbnailLink;
+                  });
                 });
             }).catch(function () { fails++; });
           });
@@ -1702,7 +1807,7 @@ Screens.discipline = (function () {
         toDrop.forEach(function (it) {
           chain = chain.then(function () {
             items = items.filter(function (x) { return x.id !== it.id; });
-            return DB.del('motivVideos', it.id);
+            return storeDel(it);
           });
         });
         toRename.forEach(function (it) {
@@ -1732,7 +1837,7 @@ Screens.discipline = (function () {
                 : null;
             }).then(function () {
               items = items.filter(function (x) { return x.id !== it.id; });
-              return DB.del('motivVideos', it.id); /* v0.46: free its phone copy too */
+              return storeDel(it); /* v0.46: free its phone copy too (v0.61: the real file) */
             }).catch(function () { fails++; });
           });
         });
@@ -1746,9 +1851,8 @@ Screens.discipline = (function () {
     }
     function draw() {
       /* refresh the stored-on-phone ✓ badges (ids only — cheap) */
-      DB.allKeys('motivVideos').then(function (keys) {
-        stored = {};
-        keys.forEach(function (k) { stored[k] = 1; });
+      storeKeys().then(function (map) {
+        stored = map;
         /* v0.59: the on-phone line */
         if (sizeLine.isConnected) {
           var onPhone = items.filter(function (x) { return stored[x.id]; }).length;
@@ -1781,9 +1885,9 @@ Screens.discipline = (function () {
         chain = chain.then(function () {
           if (it.thumb) return null;
           _thumbTried[it.id] = 1;
-          return DB.get('motivVideos', it.id).then(function (row) {
-            if (!row || !row.buf) return null;
-            var mk = cfg.mime === 'image/' ? MK_THUMB.img(row.buf, row.type) : MK_THUMB.vid(row.buf, row.type);
+          return storeGet(it).then(function (o) {
+            if (!o || !o.buf) return null;
+            var mk = cfg.mime === 'image/' ? MK_THUMB.img(o.buf, o.type) : MK_THUMB.vid(o.buf, o.type);
             return mk.then(function (d) {
               if (d) { it.thumb = d; made++; }
             });
@@ -1939,13 +2043,17 @@ Screens.discipline = (function () {
          state — bytes on the phone → 'stored', else still 'inbox'. The
          first ↻ reconciles anything that already left Drive. Nothing is
          ever dropped here. */
-      return DB.allKeys('motivVideos').then(function (keys) {
-        var have = {};
-        keys.forEach(function (k) { have[k] = 1; });
+      return storeKeys().then(function (have) {
         var migrated = false;
         items.forEach(function (it) {
+          /* v0.61 REINSTALL RESCAN: bytes found on the phone (real files
+             in AFmedia/) mark their item stored — no re-download — and
+             refresh the size line */
+          var f = have[it.id];
+          if (f && f.size && it.bytes !== f.size) { it.bytes = f.size; migrated = true; }
+          if (f && !it.isNew && it.state && it.state !== 'stored') { it.state = 'stored'; migrated = true; }
           if (it.state) return;
-          it.state = (it.isNew || have[it.id]) ? 'stored' : 'inbox';
+          it.state = (it.isNew || f) ? 'stored' : 'inbox';
           migrated = true;
         });
         return migrated ? save() : null;
@@ -1953,6 +2061,7 @@ Screens.discipline = (function () {
     }).then(function () {
       draw();
       if (isPC) return; /* the PC only views */
+      migrateToFiles(); /* v0.61: move any IndexedDB bytes out to real files */
       /* v0.50: auto actions ONLY when silent auth exists — opening a
          page must never pop the Google sign-in */
       DB.get('meta', 'gdriveRefreshToken').then(function (tok) {

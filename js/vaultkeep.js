@@ -228,11 +228,18 @@ window.VaultKeep = (function () {
 
   /* ---- Layer 1: silent rolling mirror (APK only) ---- */
   var _mirrorTimer = null;
+  /* v0.62 (#88): one mirror write at a time — the boot catch-up and the
+     change debounce could overlap and interleave into one corrupt
+     current-file (same class as the v0.57 C3 backup bug). A write that
+     arrives while one runs sets a rerun flag instead. */
+  var _mirBusy = false, _mirAgain = false;
   function writeMirror() {
     if (!(window.Native && Native.isNative && Native.isNative() &&
           Native.canSaveFiles && Native.canSaveFiles())) {
       return Promise.resolve(null);
     }
+    if (_mirBusy) { _mirAgain = true; return Promise.resolve(null); }
+    _mirBusy = true;
     return meta('vaultSerial').then(payload).then(function (j) {
       return zipCreate('data.bin', new TextEncoder().encode(JSON.stringify(j)));
     }).then(function (bytes) {
@@ -241,7 +248,12 @@ window.VaultKeep = (function () {
       if (!p) return null;
       return DB.putRaw('meta', { key: 'vaultMirrorAt', value: Date.now() })
         .then(function () { return p; });
-    }).catch(function () { return null; });
+    }).catch(function () { return null; })
+      .then(function (p) {
+        _mirBusy = false;
+        if (_mirAgain) { _mirAgain = false; writeMirror(); }
+        return p;
+      });
   }
   function touch() {
     if (_mirrorTimer) clearTimeout(_mirrorTimer);

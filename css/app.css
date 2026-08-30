@@ -902,6 +902,18 @@ html[data-msize="l"] .media-stage .crop-box { --stage-max: 440px; }
 .rw-panel .rw-head { font-weight: 700; margin-bottom: 4px; }
 .rw-panel.rw-ok { border-style: solid; border-color: #4fb06d; }
 .rw-panel.rw-bad { border-style: solid; border-color: var(--danger); }
+/* v0.61 (#86): in-panel backup file list — newest first, tap to pick */
+.rw-list { margin-top: 6px; }
+.rw-row {
+  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 7px 9px; margin: 3px 0; text-align: left;
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--r-sm); font-size: .85rem;
+}
+.rw-row .rw-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rw-row .rw-dt { flex: none; }
+.rw-row.on { border-color: #4fb06d; box-shadow: inset 0 0 0 1px #4fb06d; }
+.rw-row.rw-more { justify-content: center; border-style: dashed; }
 
 /* (v0.53 Schedules styles removed in v0.55 — section dropped) */
 .td-b-diamond { background: linear-gradient(135deg, #eaf5ff 0%, #a8d4ff 30%, #e6f0ff 50%, #7fb8f0 72%, #dcefff 100%); overflow: hidden; }

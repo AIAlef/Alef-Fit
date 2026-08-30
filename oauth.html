@@ -29,14 +29,18 @@
   var out = document.getElementById('out');
   var code = q.get('code');
   if (code) {
-    out.innerHTML = '<p>Copy this code, go back to the Alef.Fit app and paste it into the "Code from Google" box:</p>' +
-      '<div id="code"></div><button id="cp">Copy code</button><p id="ok"></p>';
+    /* v0.61: ONE button — copy the code, then switch back to the app;
+       Alef.Fit reads the clipboard on return and fills the box itself. */
+    out.innerHTML = '<p>Tap the button, then switch back to the <b>Alef.Fit</b> app — the code fills in by itself:</p>' +
+      '<div id="code"></div><button id="cp">Copy code — return to Alef.Fit</button><p id="ok"></p>';
     document.getElementById('code').textContent = code;
     document.getElementById('cp').addEventListener('click', function () {
       (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(function () {
-        document.getElementById('ok').textContent = 'Copied ✓ — now return to Alef.Fit';
+        document.getElementById('ok').innerHTML = 'Copied ✓ — now <b>switch back to Alef.Fit</b> (recent-apps or Back). ' +
+          'The code pastes itself into the box; if not, long-press the box and Paste.';
+        setTimeout(function () { try { window.close(); } catch (e) { /* tab stays — fine */ } }, 900);
       }, function () {
-        document.getElementById('ok').textContent = 'Long-press the code to copy it';
+        document.getElementById('ok').textContent = 'Long-press the code to copy it, then return to Alef.Fit';
       });
     });
   } else {

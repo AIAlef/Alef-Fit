@@ -80,6 +80,12 @@ window.Sync = (function () {
     return _token;
   }
 
+  /* v0.61 (#86): does clipboard text look like a Google OAuth code?
+     (they start "4/" — never auto-fill arbitrary clipboard content) */
+  function oauthCodeLooksValid(t) {
+    return typeof t === 'string' && /^4\/[A-Za-z0-9_\-\/\.]{10,}$/.test(t) && t.length < 400;
+  }
+
   /* APK path: Google refuses OAuth inside WebViews — open the system
      browser, land on oauth.html (shows the code), user pastes it back. */
   function nativeInteractive() {
@@ -94,19 +100,50 @@ window.Sync = (function () {
       : Promise.resolve(false);
     return opener.then(function () {
       return new Promise(function (resolve, reject) {
-        var body = UI.el('<div><p class="sub">Google opened in your browser. Approve access there — it will show a CODE. Copy it and paste here:</p>' +
-          UI.field('Code from Google', '<input type="text" id="oa-code" autocomplete="off" autocapitalize="off">') + '</div>');
+        var body = UI.el('<div><p class="sub">Google opened in your browser. Approve access there and tap ' +
+          '<b>Copy code — return to Alef.Fit</b> on the last page. Back here the code fills in by itself (or tap Paste):</p>' +
+          UI.field('Code from Google', '<input type="text" id="oa-code" autocomplete="off" autocapitalize="off">') +
+          '<button type="button" class="chip" id="oa-paste">Paste</button></div>');
+        var inp = body.querySelector('#oa-code');
+        /* v0.61 (#86): oauth.html copies the code — read the clipboard
+           when Alef returns (focus/visibility) and fill the box. Best
+           effort: a WebView may refuse clipboard reads, so the Paste
+           button and long-press paste stay as manual paths. */
+        function tryFill(fromTap) {
+          try {
+            if (!navigator.clipboard || !navigator.clipboard.readText) return;
+            navigator.clipboard.readText().then(function (t) {
+              t = String(t || '').trim();
+              if (!oauthCodeLooksValid(t)) {
+                if (fromTap) UI.toast('No Google code on the clipboard — tap Copy code on the Google page first');
+                return;
+              }
+              if (inp.value && !fromTap) return; /* never overwrite a typed code */
+              inp.value = t;
+              UI.toast('Code pasted ✓ — tap Connect');
+            }).catch(function () { /* refused — manual paste still works */ });
+          } catch (e) { /* ok */ }
+        }
+        function onVis() { if (!document.hidden) setTimeout(function () { tryFill(false); }, 250); }
+        document.addEventListener('visibilitychange', onVis);
+        window.addEventListener('focus', onVis);
+        function unhook() {
+          document.removeEventListener('visibilitychange', onVis);
+          window.removeEventListener('focus', onVis);
+        }
+        body.querySelector('#oa-paste').addEventListener('click', function () { tryFill(true); });
         UI.modal('Google sign-in', body, [
-          { label: 'Cancel', onClick: function (close) { close(); reject(new Error('Sign-in cancelled')); } },
+          { label: 'Cancel', onClick: function (close) { unhook(); close(); reject(new Error('Sign-in cancelled')); } },
           {
             label: 'Connect', primary: true, onClick: function (close) {
-              var v = body.querySelector('#oa-code').value.trim();
+              var v = inp.value.trim();
               if (!v) return;
+              unhook();
               close();
               resolve(v);
             }
           }
-        ]);
+        ], { onDismiss: function () { unhook(); reject(new Error('Sign-in cancelled')); } });
       });
     }).then(function (code) {
       return tokenPost({
@@ -761,6 +798,7 @@ window.Sync = (function () {
     motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },
-    hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); }
+    hasClientId: function () { var s = DB.getSettings() || {}; return !!(s.gdriveClientId && s.gdriveClientSecret); },
+    _oauthCodeLooksValid: oauthCodeLooksValid /* exported for the regression suite */
   };
 })();
