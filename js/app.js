@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.57.0';
+var APP_VERSION = '0.58.0';
 
 var App = (function () {
 
@@ -101,7 +101,9 @@ var App = (function () {
         if (!alertAt) return;
         var diff = alertAt.getTime() - now.getTime();
         if (diff <= 0 && diff > -60000) {
-          var key = 'td-' + t.id;
+          /* v0.58 C11: key includes date+time — a RESCHEDULED task alerts
+             again (the id-only key silenced it for the app's lifetime) */
+          var key = 'td-' + t.id + '-' + t.dueDate + '-' + (t.time || 'allday');
           if (_fired[key]) return;
           _fired[key] = 1;
           notify('To-do: ' + t.title, t.allDay ? UI.fmtDate(t.dueDate) : UI.fmtDateTime(t.dueDate, t.time));

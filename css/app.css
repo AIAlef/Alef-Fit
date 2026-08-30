@@ -1346,3 +1346,16 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 .td-note-head .td-note-max { margin-left: auto; }
 .td-sheet .td-note { min-height: 14em; }
 .td-note-full { height: 72vh; min-height: 300px; resize: none; width: 100%; box-sizing: border-box; }
+
+/* ==== v0.58: Aesthetic 3-across + card drag ==== */
+.mv-grid.mv-3 { grid-template-columns: 1fr 1fr 1fr; gap: 7px; }
+.mv-3 .mv-name { font-size: .66rem; line-height: 1.2; }
+.mv-3 .mv-edit svg { width: 15px; height: 15px; }
+.mv-card.drag-src { opacity: .45; }
+.mv-card.ins-before { box-shadow: -3px 0 0 0 var(--accent); }
+.mv-card.ins-after { box-shadow: 3px 0 0 0 var(--accent); }
+.mv-cat.drop-hint { color: var(--accent); }
+.section-title .bk-help { vertical-align: middle; margin-left: 2px; padding: 2px; }
+.bk-help svg { width: 17px; height: 17px; }
+.bk-help-body p { margin: 0 0 8px; font-size: .82rem; line-height: 1.45; }
+.bk4-status { white-space: pre-line; }

@@ -118,6 +118,13 @@ Screens.discipline = (function () {
      From 00:01 every task dated for tomorrow surfaces here by itself
      (tomorrowISO rolls at midnight; draw computes membership live), and
      the next midnight promoteNowDue carries it on into TODAY. */
+  /* v0.58 C13: local-time date for a timestamp (toISOString sliced showed
+     YESTERDAY before ~07:00 in UTC+7) */
+  function localISO(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
   function tomorrowISO() {
     var d = new Date(DB.todayISO() + 'T00:00:00');
     d.setDate(d.getDate() + 1);
@@ -1144,12 +1151,35 @@ Screens.discipline = (function () {
       mime: 'video/', folderId: function () { return Sync.motivFolderId(); }
     });
   }
-  /* v0.47: Aesthetic Collection — same machinery, images instead of videos */
+  /* v0.47: Aesthetic Collection — same machinery, images instead of videos.
+     v0.58: 3 cards per row (Alef's ask; Motivation stays 2). */
   function renderAesth(el) {
     renderCollection(el, {
       title: 'Aesthetic Collection', metaKey: 'aesthList', noun: 'image',
-      mime: 'image/', folderId: function () { return Sync.aesthFolderId(); }
+      mime: 'image/', cols: 3, folderId: function () { return Sync.aesthFolderId(); }
     });
+  }
+
+  /* v0.58: hold-drag sort/re-rate — the pure move, so the suite can test
+     it. targetId null = dropped on a group HEADLINE → the item goes to the
+     end of its (possibly new) rating group. Returns true when applied. */
+  function mvReorder(items, itId, targetId, after, newRating) {
+    var it = items.filter(function (x) { return x.id === itId; })[0];
+    if (!it) return false;
+    items.splice(items.indexOf(it), 1);
+    if (newRating != null && newRating !== it.rating) it.rating = newRating;
+    var idx;
+    if (targetId) {
+      var tg = items.filter(function (x) { return x.id === targetId; })[0];
+      idx = tg ? items.indexOf(tg) + (after ? 1 : 0) : items.length;
+    } else {
+      idx = -1;
+      items.forEach(function (x, i2) { if (x.rating === it.rating) idx = i2; });
+      idx += 1;
+      if (idx === 0) idx = items.length; /* group empty → end of list */
+    }
+    items.splice(idx, 0, it);
+    return true;
   }
   function renderCollection(el, cfg) {
     var items = [];
@@ -1303,21 +1333,42 @@ Screens.discipline = (function () {
       var btn = hdr.querySelector('.topbar-action button');
       if (btn) btn.classList.add('spin');
       Sync.motivList(cfg.folderId(), cfg.mime).then(function (files) {
-        var old = {};
-        items.forEach(function (it) { old[it.id] = it; });
-        items = files.map(function (f) {
+        /* v0.58 C9: MERGE, never rebuild — a ↻ used to silently drop
+           gallery-staged (＋) items that were not yet ☁ Applied, forget
+           every card's fit setting, and reset the manual order. Existing
+           items keep their object (fit/thumb/order intact), staged edits
+           still win, new Drive files append at the end. (A file DELETED
+           in Drive still leaves the list here — the v0.59 inbox flow
+           changes that; don't empty the Drive folders yet.) */
+        var byId = {};
+        files.forEach(function (f) { byId[f.id] = f; });
+        var next = [];
+        items.forEach(function (it) {
+          if (it.isNew) { next.push(it); return; }   /* staged upload — not in Drive yet */
+          var f = byId[it.id];
+          if (!f) return;
+          delete byId[it.id];
           var p = mvParse(f.name);
-          var prev = old[f.id];
-          var it = {
+          if (!mvDirty(it)) { it.name = p.name; it.rating = p.rating; } /* no staged edit → follow Drive */
+          it.drvName = f.name;
+          it.ext = p.ext;
+          it.mime = f.mimeType;
+          it.thumbLink = f.thumbnailLink || it.thumbLink;
+          it.origName = p.name;
+          it.origRating = p.rating;
+          next.push(it);
+        });
+        files.forEach(function (f) {
+          if (!byId[f.id]) return;
+          var p = mvParse(f.name);
+          next.push({
             id: f.id, drvName: f.name, ext: p.ext, mime: f.mimeType,
-            thumbLink: f.thumbnailLink || null,
-            thumb: prev ? prev.thumb : null,
+            thumbLink: f.thumbnailLink || null, thumb: null,
             origName: p.name, origRating: p.rating,
             name: p.name, rating: p.rating
-          };
-          if (prev && mvDirty(prev)) { it.name = prev.name; it.rating = prev.rating; } /* keep staged edits */
-          return it;
+          });
         });
+        items = next;
         return save().then(function () {
           draw();
           /* thumbnails after the list is on screen */
@@ -1567,21 +1618,120 @@ Screens.discipline = (function () {
         var inR = items.filter(function (it) { return it.rating === r; });
         if (!inR.length) return;
         var lb = r === 'na' ? 'N/A — no rating' : (r === 'X' ? 'X — marked for delete' : r);
-        wrap.appendChild(UI.el('<div class="section-title mv-cat' + (r === 'X' ? ' mv-cat-x' : '') + '">' + lb + ' <span class="tdc-n">(' + inR.length + ')</span></div>'));
-        var grid = UI.el('<div class="mv-grid"></div>');
+        wrap.appendChild(UI.el('<div class="section-title mv-cat' + (r === 'X' ? ' mv-cat-x' : '') + '" data-r="' + r + '">' + lb + ' <span class="tdc-n">(' + inR.length + ')</span></div>'));
+        var grid = UI.el('<div class="mv-grid' + (cfg.cols === 3 ? ' mv-3' : '') + '"></div>');
         inR.forEach(function (it) {
-          var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + '">' +
+          var card = UI.el('<div class="mv-card' + (it.rating === 'X' ? ' mv-dim' : '') + '" data-id="' + it.id + '">' +
             '<button class="mv-thumb fit-' + (it.fit === 'w' ? 'w' : 'h') + '" aria-label="play">' +
             (it.thumb ? '<img src="' + it.thumb + '" alt="">' : '<span class="mv-ph">▶</span>') +
             (stored[it.id] ? '<span class="mv-loc" title="Stored on this phone">✓</span>' : '') +
             '</button>' +
             '<div class="mv-row"><span class="mv-name">' + UI.esc(it.name) + (mvDirty(it) ? ' <span class="mv-dot">●</span>' : '') + '</span>' +
             '<button class="btn-icon sm mv-edit" aria-label="edit">' + UI.icon('edit') + '</button></div></div>');
-          card.querySelector('.mv-thumb').addEventListener('click', function () { play(it); });
+          card.querySelector('.mv-thumb').addEventListener('click', function () {
+            if (card.dataset.held) { delete card.dataset.held; return; } /* drag, not a tap */
+            play(it);
+          });
           card.querySelector('.mv-edit').addEventListener('click', function () { editSheet(it); });
+          enableCardDrag(card, it);
           grid.appendChild(card);
         });
         wrap.appendChild(grid);
+      });
+    }
+    /* v0.58 (Alef's ask): press-hold a card, then DRAG — onto another card
+       = re-sort (left half → before, right half → after; another group's
+       card also re-rates); onto a rating HEADLINE = staged re-rate to that
+       group (X headline = staged delete). ☁ Apply pushes rating changes
+       to Drive exactly like the ✎ edit; the order lives in the app list. */
+    function enableCardDrag(card, it) {
+      var holdTimer = null, sx = 0, sy = 0, dragging = false, ghost = null;
+      function clearHints() {
+        document.querySelectorAll('.ins-before, .ins-after, .drop-hint').forEach(function (h) {
+          h.classList.remove('ins-before'); h.classList.remove('ins-after'); h.classList.remove('drop-hint');
+        });
+      }
+      function targetAt(x, y) {
+        if (!document.elementFromPoint) return null;
+        var n = document.elementFromPoint(x, y);
+        if (!n || !n.closest) return null;
+        var c2 = n.closest('.mv-card');
+        if (c2 && c2 !== card) return { card: c2 };
+        var h = n.closest('.mv-cat');
+        if (h) return { head: h };
+        return null;
+      }
+      card.addEventListener('touchmove', function (e) { if (dragging) e.preventDefault(); }, { passive: false });
+      card.addEventListener('contextmenu', function (e) { if (dragging || holdTimer) e.preventDefault(); });
+      card.addEventListener('pointerdown', function (e) {
+        if (e.target.closest && e.target.closest('.mv-edit')) return;
+        sx = e.clientX; sy = e.clientY; dragging = false;
+        holdTimer = setTimeout(function () {
+          holdTimer = null;
+          dragging = true;
+          card.dataset.held = '1';
+          ghost = card.cloneNode(true);
+          ghost.className = 'drag-ghost';
+          ghost.style.width = Math.min(140, card.offsetWidth || 140) + 'px';
+          ghost.style.left = (sx - 30) + 'px';
+          ghost.style.top = (sy - 30) + 'px';
+          document.body.appendChild(ghost);
+          card.classList.add('drag-src');
+        }, 350);
+        function onMove(ev) {
+          if (!dragging) {
+            if (holdTimer && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 10) {
+              clearTimeout(holdTimer); holdTimer = null; cleanup();
+            }
+            return;
+          }
+          ghost.style.left = (ev.clientX - 30) + 'px';
+          ghost.style.top = (ev.clientY - 30) + 'px';
+          clearHints();
+          var tg = targetAt(ev.clientX, ev.clientY);
+          if (tg && tg.card) {
+            var rc = tg.card.getBoundingClientRect();
+            tg.card.classList.add(ev.clientX < rc.left + rc.width / 2 ? 'ins-before' : 'ins-after');
+          } else if (tg && tg.head) {
+            tg.head.classList.add('drop-hint');
+          }
+        }
+        function onUp(ev) {
+          if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+          cleanup();
+          if (!dragging) return;
+          dragging = false;
+          if (ghost) { ghost.remove(); ghost = null; }
+          card.classList.remove('drag-src');
+          var tg = targetAt(ev.clientX, ev.clientY);
+          clearHints();
+          setTimeout(function () { delete card.dataset.held; }, 80);
+          if (!tg) return;
+          var changed = false;
+          var wasRating = it.rating;
+          if (tg.card) {
+            var rc2 = tg.card.getBoundingClientRect();
+            var after = ev.clientX >= rc2.left + rc2.width / 2;
+            var tgIt = items.filter(function (x) { return x.id === tg.card.dataset.id; })[0];
+            changed = mvReorder(items, it.id, tg.card.dataset.id, after, tgIt ? tgIt.rating : null);
+          } else if (tg.head) {
+            changed = mvReorder(items, it.id, null, false, tg.head.dataset.r);
+          }
+          if (!changed) return;
+          if (it.rating !== wasRating) {
+            UI.toast(it.rating === 'X' ? 'Marked for delete — ☁ Apply moves it to Drive trash'
+              : 'Rated ' + (it.rating === 'na' ? 'N/A' : it.rating) + ' — ☁ Apply renames it in Drive');
+          }
+          save().then(draw);
+        }
+        function cleanup() {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onUp);
+        }
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
       });
     }
     DB.get('meta', cfg.metaKey).then(function (r) {
@@ -1703,17 +1853,26 @@ Screens.discipline = (function () {
 
     var note = UI.el('<textarea class="rf-note" placeholder="What did these tasks teach you? Note the lessons, ideas, plans or anything useful you gained this month — it saves by itself."></textarea>');
     page.appendChild(note);
-    var noteObj = {};
+    /* v0.58 P10: two races fixed — a save before the map loaded used to
+       REPLACE every other month's lesson with {}, and a slow load used to
+       overwrite what was just typed. Saves wait for the load; the load
+       never clobbers typed text; each save re-reads the stored map. */
+    var noteLoaded = false;
     DB.get('meta', 'todoReflect').then(function (r) {
-      noteObj = (r && r.value) || {};
-      if (noteObj[ym]) note.value = noteObj[ym];
+      var v = (r && r.value) || {};
+      if (v[ym] && !note.value) note.value = v[ym];
+      noteLoaded = true;
     });
     var saveT = null;
     note.addEventListener('input', function () {
       clearTimeout(saveT);
-      saveT = setTimeout(function () {
-        noteObj[ym] = note.value;
-        DB.put('meta', { key: 'todoReflect', value: noteObj, updatedAt: Date.now() });
+      saveT = setTimeout(function saveReflect() {
+        if (!noteLoaded) { saveT = setTimeout(saveReflect, 300); return; }
+        DB.get('meta', 'todoReflect').then(function (r) {
+          var v = (r && r.value) || {};
+          v[ym] = note.value;
+          DB.put('meta', { key: 'todoReflect', value: v, updatedAt: Date.now() });
+        });
       }, 500);
     });
 
@@ -1836,6 +1995,7 @@ Screens.discipline = (function () {
       /* v0.40: rating "Never" files the task into the NEVER list (Vault
          entries stay put — nothing may move OUT of the Vault by side effect) */
       if (t.prio === 'monkey' && t.cat !== 'vault' && t.cat !== 'never') {
+        _schedTouched = true;
         t.cat = 'never';
         t.now = false;
         t.nowAt = null;
@@ -1875,6 +2035,7 @@ Screens.discipline = (function () {
         row.innerHTML = '';
         var nowTg = UI.el('<button type="button" class="chip td-now-chip' + (t.now ? ' on' : '') + '">Now' + (t.now ? ' ✓' : '') + '</button>');
         nowTg.addEventListener('click', function () {
+          _schedTouched = true;
           t.now = !t.now;
           if (t.now) { t.nowAt = null; t.startDate = null; t.startTime = null; } /* Now beats any schedule */
           dirt();
@@ -1887,6 +2048,7 @@ Screens.discipline = (function () {
           var hv = h + ':00';
           var hc = UI.el('<button type="button" class="chip td-hr-chip' + (!t.startDate && t.nowAt === hv ? ' on' : '') + '" title="Do at ' + hv + '">' + h + '</button>');
           hc.addEventListener('click', function () {
+            _schedTouched = true;
             if (t.nowAt === hv && !t.startDate) { t.nowAt = null; }
             else { t.nowAt = hv; t.now = false; t.startDate = null; t.startTime = null; }
             dirt();
@@ -1900,6 +2062,7 @@ Screens.discipline = (function () {
         var dateIn = UI.el('<input type="date" class="td-startd" title="Start date" value="' + UI.esc(t.startDate || '') + '">');
         var nowAtIn = UI.el('<input type="time" class="td-nowat" title="' + (t.startDate ? 'Start time' : 'Becomes Now at this time') + '" value="' + UI.esc(t.startDate ? (t.startTime || '08:00') : (t.nowAt || '')) + '">');
         dateIn.addEventListener('change', function () {
+          _schedTouched = true;
           if (dateIn.value) {
             t.startDate = dateIn.value;
             t.startTime = nowAtIn.value || '08:00';
@@ -1913,6 +2076,7 @@ Screens.discipline = (function () {
           refreshTags();
         });
         nowAtIn.addEventListener('change', function () {
+          _schedTouched = true;
           if (t.startDate) {
             t.startTime = nowAtIn.value || '08:00';
           } else {
@@ -1950,6 +2114,7 @@ Screens.discipline = (function () {
       });
     }
     var _schedOpen = false; /* v0.56: calendar icon toggles the date+time row */
+    var _schedTouched = false; /* v0.58 P9: user touched schedule/cat here — sheet wins over a mid-edit promotion */
     refreshTags();
     body.appendChild(isVault ? foldable('Tags', tagWrap) : tagWrap);
 
@@ -2143,6 +2308,7 @@ Screens.discipline = (function () {
       var tok = parseStartToken(name);
       if (tok) {
         name = tok.title;
+        _schedTouched = true;
         t.startDate = tok.date;
         t.startTime = t.startTime || '08:00';
         t.now = false;
@@ -2151,8 +2317,20 @@ Screens.discipline = (function () {
       }
       t.title = name;
       t.note = noteIn.value;
-      Object.assign(orig, t);
-      DB.put('todos', orig).then(function () { close(); onDone(); });
+      /* v0.58 P9: a promotion (scheduled date/time reached) can fire while
+         the sheet is open — unless the schedule was touched IN this sheet,
+         the live record's schedule/list/now fields win over the stale copy */
+      DB.get('todos', orig.id).then(function (live) {
+        if (live && !_schedTouched) {
+          t.cat = live.cat;
+          t.now = live.now;
+          t.nowAt = live.nowAt;
+          t.startDate = live.startDate;
+          t.startTime = live.startTime;
+        }
+        Object.assign(orig, t);
+        return DB.put('todos', orig);
+      }).then(function () { close(); onDone(); });
     }
 
     if (roMode) {
@@ -2451,7 +2629,7 @@ Screens.discipline = (function () {
           drafts.forEach(function (pr) {
             var row = UI.el('<div class="list-item"><input type="checkbox" class="sd-pick" data-id="' + pr.id + '" checked>' +
               '<span class="li-main"><span class="li-title">' + UI.esc(DB.propSummary(pr)) + '</span>' +
-              '<span class="li-sub">' + UI.esc(pr.store) + ' · ' + UI.fmtDate(new Date(pr.proposedAt).toISOString().slice(0, 10)) + '</span></span>' +
+              '<span class="li-sub">' + UI.esc(pr.store) + ' · ' + UI.fmtDate(localISO(pr.proposedAt)) + '</span></span>' +
               '<button class="td-del" aria-label="delete draft">✕</button></div>');
             row.querySelector('.td-del').addEventListener('click', function () {
               UI.confirm('Delete this draft?', 'Delete').then(function (ok2) {
@@ -2512,15 +2690,34 @@ Screens.discipline = (function () {
         }
         var allBtn = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:10px">Accept all (' + inbox.length + ')</button>');
         allBtn.addEventListener('click', function () {
-          UI.confirm('Accept all ' + inbox.length + ' changes from the PC?', 'Accept all').then(function (ok2) {
+          /* v0.58 P8: Accept-all now counts the ⚠ stale items into the
+             confirm and SKIPS anything whose target moved into the Vault */
+          Promise.all(inbox.map(function (pr) {
+            return (pr.store === 'meta' ? DB.get('meta', pr.recId) : DB.get(pr.store, pr.recId))
+              .then(function (live) { return live && (live.updatedAt || 0) > (pr.base || 0) ? 1 : 0; })
+              .catch(function () { return 0; });
+          })).then(function (fl) {
+            var staleN = fl.reduce(function (a, b) { return a + b; }, 0);
+            return UI.confirm('Accept all ' + inbox.length + ' changes from the PC?' +
+              (staleN ? ' ⚠ ' + staleN + ' of them changed on THIS phone since the draft — accepting overwrites the newer local copy.' : ''),
+              'Accept all');
+          }).then(function (ok2) {
             if (!ok2) return;
+            var skipped = 0;
             var chain = Promise.resolve();
             inbox.forEach(function (pr) {
               chain = chain.then(function () {
-                return DB.applyProposal(pr).then(function () { return DB.del('proposals', pr.id); });
+                return DB.applyProposal(pr).then(function () { return DB.del('proposals', pr.id); })
+                  .catch(function (eP) {
+                    if (eP && eP.vaultSkip) { skipped++; return null; } /* proposal stays for review */
+                    throw eP;
+                  });
               });
             });
-            chain.then(function () { UI.toast('All changes applied'); draw(); });
+            chain.then(function () {
+              UI.toast(skipped ? 'Applied — ' + skipped + ' skipped (target is in the Vault)' : 'All changes applied');
+              draw();
+            });
           });
         });
         wrap.appendChild(allBtn);
@@ -2558,6 +2755,8 @@ Screens.discipline = (function () {
                 DB.applyProposal(pr).then(function () { return DB.del('proposals', pr.id); }).then(function () {
                   UI.toast('Applied');
                   draw();
+                }).catch(function (eP) {
+                  UI.toast('⚠ ' + String(eP && eP.message || eP));
                 });
               });
               row.querySelector('.rv-no').addEventListener('click', function () {
@@ -2635,6 +2834,11 @@ Screens.discipline = (function () {
           if (c.color && !cur) { b.style.background = c.color; b.style.borderColor = c.color; b.style.color = '#fff'; }
           if (!cur) {
             b.addEventListener('click', function () {
+              /* v0.58 C10: route through the TOMORROW move rules — leaving
+                 the virtual list must clear the assigned date + time
+                 (before this, a TOMORROW task "moved" but stayed put) */
+              var planM = tdMovePlan(t, c.id, tomorrowISO());
+              Object.assign(t, planM.patch);
               t.cat = c.id;
               DB.put('todos', t).then(function () { i++; show(); });
             });
@@ -2781,7 +2985,7 @@ Screens.discipline = (function () {
           var it = UI.el('<button class="list-item">' +
             '<span class="li-thumb">' + UI.icon('note') + '</span>' +
             '<span class="li-main"><span class="li-title">' + (n.pinned ? '📌 ' : '') + UI.esc(n.title || '(untitled)') + '</span>' +
-            '<span class="li-sub">' + UI.esc(tagStr || UI.fmtDate(new Date(n.updatedAt).toISOString().slice(0, 10))) + '</span></span>' +
+            '<span class="li-sub">' + UI.esc(tagStr || UI.fmtDate(localISO(n.updatedAt))) + '</span></span>' +
             '<span class="chev">' + UI.icon('chev') + '</span></button>');
           it.addEventListener('click', function () { location.hash = '#/discipline/' + module + '/n/' + n.id; });
           if (img0) {
@@ -3270,5 +3474,6 @@ Screens.discipline = (function () {
   return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
     _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport,
     _tomorrowISO: tomorrowISO, _tdMovePlan: tdMovePlan,
-    _thumbFromVideoBuf: thumbFromVideoBuf, _mkThumb: MK_THUMB };
+    _thumbFromVideoBuf: thumbFromVideoBuf, _mkThumb: MK_THUMB,
+    _mvReorder: mvReorder };
 })();

@@ -1,6 +1,10 @@
 /* Alef.Fit service worker — cache-first app shell for offline use.
-   Bump CACHE on every release (matches APP_VERSION). */
-var CACHE = 'alef-fit-v0.57.0';
+   Bump CACHE on every release (matches APP_VERSION).
+   v0.58 C12: runtime-cached exercise photos live in their own UNVERSIONED
+   cache (IMG_CACHE) that activate spares — a release used to delete every
+   photo the user had browsed offline. */
+var CACHE = 'alef-fit-v0.58.0';
+var IMG_CACHE = 'alef-fit-img';
 var ASSETS = [
   './', './index.html', './oauth.html', './css/app.css', './manifest.webmanifest',
   './js/db.js', './js/native.js', './js/ui.js', './js/seed-data.js', './js/sync.js', './js/vaultkeep.js', './js/devtext.js', './js/app.js',
@@ -28,7 +32,7 @@ self.addEventListener('install', function (e) {
 
 self.addEventListener('activate', function (e) {
   e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+    return Promise.all(keys.filter(function (k) { return k !== CACHE && k !== IMG_CACHE; }).map(function (k) { return caches.delete(k); }));
   }).then(function () { return self.clients.claim(); }));
 });
 
@@ -38,10 +42,11 @@ self.addEventListener('fetch', function (e) {
     if (hit) return hit;
     return fetch(e.request).then(function (res) {
       /* runtime-cache the bundled exercise photos on first view so they
-         work offline without precaching all 345 up front */
+         work offline without precaching all 345 up front — into the
+         unversioned IMG_CACHE so app updates never evict them (v0.58) */
       if (res && res.ok && e.request.url.indexOf('/exercise-img/') !== -1) {
         var copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+        caches.open(IMG_CACHE).then(function (c) { c.put(e.request, copy); });
       }
       return res;
     });

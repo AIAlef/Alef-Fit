@@ -400,10 +400,10 @@ window.Sync = (function () {
   }
 
   function silentSync() {
-    if (_busy) return Promise.resolve(null);
+    if (_busy || _rtBusy) return Promise.resolve(null);
     return canAuto().then(function (okA) {
       if (!okA) return null;
-      return syncNow(function () {}).catch(function () { return null; });
+      return syncNow(function () {}, null, { snapshot: false }).catch(function () { return null; });
     });
   }
 
@@ -462,9 +462,12 @@ window.Sync = (function () {
   /* v0.36 "Sync Workout": scope limited to the training content */
   var WORKOUT_STORES = ['exercises', 'programs', 'logs'];
 
-  function syncNow(onStatus, scope) {
-    if (_busy) return Promise.reject(new Error('Sync already running'));
+  function syncNow(onStatus, scope, opts) {
+    /* v0.58 P4: also refuse while a Claude round-trip runs — both paths
+       process the inbox, and a direct batch must never apply twice */
+    if (_busy || _rtBusy) return Promise.reject(new Error('Sync already running'));
     _busy = true;
+    opts = opts || {};
     var workout = scope === 'workout';
     var say = onStatus || function () {};
     var result = { pulled: null, mediaUp: 0, mediaDown: 0, mediaTrimmed: 0, share: null };
@@ -484,7 +487,10 @@ window.Sync = (function () {
         remoteData = remote || null;
         if (remote) {
           say('Merging…');
-          return DB.importAll(remote, { mode: 'merge', only: workout ? WORKOUT_STORES : null })
+          /* v0.58 P11: quiet background syncs skip the Undo snapshot — it
+             re-serialized the whole dataset every 45 s and silently
+             replaced the user's manual-import undo point */
+          return DB.importAll(remote, { mode: 'merge', only: workout ? WORKOUT_STORES : null, noSnapshot: opts.snapshot === false })
             .then(function (c) { result.pulled = c; });
         }
       })
@@ -541,7 +547,11 @@ window.Sync = (function () {
       .then(function () { return DB.gcMedia(); })
       .then(function () { return DB.all('media'); })
       .then(function (rows) {
-        /* trim remote blobs nothing references after the merge */
+        /* trim remote blobs nothing references after the merge.
+           v0.58 P5: NEVER on a scoped sync — a workout-only merge skips
+           notes, so the other device's note media looked unreferenced
+           and was deleted from Drive. */
+        if (workout) return null;
         var keep = {};
         rows.forEach(function (m) { keep[m.id] = 1; });
         var chain = Promise.resolve();

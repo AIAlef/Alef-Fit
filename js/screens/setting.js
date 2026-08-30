@@ -113,9 +113,8 @@ Screens.setting = (function () {
     im.querySelector('#st-iq').addEventListener('change', function (e) { DB.saveSettings({ imageQuality: e.target.value }); });
     pad.appendChild(im);
 
-    /* ---- backup (v0.32): four tiers, smallest scope -> everything ---- */
-    pad.appendChild(UI.el('<div class="section-title">Backup</div>'));
-    var bk = UI.el('<div class="card"></div>');
+    /* ---- backup — lean two-button front (v0.57), how-to behind the
+       ? icon on the headline (v0.58, Alef's ask) ---- */
     var canFs = !!(window.Native && Native.isNative && Native.isNative() &&
                    Native.canSaveFiles && Native.canSaveFiles());
     var whereTxt = canFs
@@ -123,8 +122,20 @@ Screens.setting = (function () {
       : (window.Native && Native.isNative && Native.isNative()
         ? '⚠ Update the app (apk-latest) to enable saving files.'
         : 'Files go to the browser\'s Downloads folder.');
-    bk.appendChild(UI.el('<div class="sub" style="margin-bottom:10px">Lean backup: TWO buttons cover everything. ' +
-      whereTxt + ' Import restores ANY backup file — old long-named files included (the type is detected).</div>'));
+    var BK_HELP =
+      '<p><b>Full backup</b> — everything incl. media + Vault → <b>AFbak-DDMMYY.json</b>; the dated Vault file <b>AFvault-DDMMYY.AFdd</b> writes with it. One file per day (a re-run overwrites).</p>' +
+      '<p><b>Vault backup</b> — the Vault alone (.AFdd). Monthly: copy the dated file to USB.</p>' +
+      '<p><b>Where:</b> ' + whereTxt + '</p>' +
+      '<p><b>Import</b> — restores ANY backup file, old long names included (the type is detected). <b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.</p>' +
+      '<p><b>New phone</b> — "Import to new phone (Full + Vault)" here, or the Setup wizard\'s ⚡ one-stop restore.</p>' +
+      '<p><b>Drive mirror</b> — uploads a VAULT-FREE full backup to My Drive › Alef.Fit › Archives (keeps the newest 3). The line turns RED past your reminder interval.</p>' +
+      '<p><b>Advanced</b> — rare small exports: connection settings (AFinfo), tasks only (AFtodo), PC ↔ phone transfer (AFtrans).</p>';
+    var bkHead = UI.el('<div class="section-title">Backup <button type="button" class="btn-icon sm bk-help" aria-label="How backup works">' + UI.icon('help') + '</button></div>');
+    bkHead.querySelector('.bk-help').addEventListener('click', function () {
+      UI.modal('Backup — how it works', UI.el('<div class="bk-help-body">' + BK_HELP + '</div>'), [{ label: 'Close', primary: true }]);
+    });
+    pad.appendChild(bkHead);
+    var bk = UI.el('<div class="card"></div>');
     function bkBtn(label, primary) {
       return UI.el('<button class="btn ' + (primary ? 'btn-primary ' : '') + 'btn-block" style="margin-bottom:8px">' +
         UI.icon('download') + ' ' + label + '</button>');
@@ -178,8 +189,18 @@ Screens.setting = (function () {
         return '⚠ Last attempt ' + new Date(info.at).toLocaleString('en-GB') + ' FAILED — ' +
           (info.error || 'unknown error');
       }
-      return '✓ Current backup: ' + new Date(info.at).toLocaleString('en-GB') + ' · ' + info.mb + ' MB · ' +
-        (info.path || 'downloaded to this browser');
+      /* v0.58 (Alef's ask): show WHERE + BOTH filenames (data + Vault) */
+      var loc, file;
+      if (info.path) {
+        var cut = info.path.lastIndexOf('/');
+        loc = info.path.slice(0, cut);
+        file = info.path.slice(cut + 1);
+      } else {
+        loc = 'Downloads (this browser)';
+        file = 'AFbak file';
+      }
+      return '✓ Current backup: ' + new Date(info.at).toLocaleString('en-GB') + ' · ' + info.mb + ' MB\n' +
+        loc + ' — ' + file + (info.vaultFile ? ' + ' + info.vaultFile : '');
     }
     /* v0.57 A2: staleness nudge — quiet while ≤ 7 days, red beyond */
     var bk4Age = UI.el('<div class="sub bk4-age" style="margin:0 0 8px"></div>');
@@ -212,6 +233,7 @@ Screens.setting = (function () {
           bk4Status.textContent = fmtBk4(info);
           paintAge(info);
           if (!ok) return;
+          DB.stampExport(); /* v0.58 P7: a delivered full backup advances the 'since' window */
           /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
              Vault .AFdd — serial bumps and the 30-day timer resets */
           if ((DB.getSettings().deviceId || '') !== 'PC' && window.VaultKeep) {
@@ -219,6 +241,13 @@ Screens.setting = (function () {
               if (!rows.some(function (r) { return r.cat === 'vault'; })) return;
               VaultKeep.backupNow().then(function (r) {
                 UI.toast('Vault .AFdd #' + VaultKeep.fmtSerial(r.serial) + ' written too');
+                /* v0.58: the Vault filename joins the status line, persisted */
+                return DB.get('meta', 'fullBackupInfo').then(function (fi) {
+                  var v = (fi && fi.value) || info;
+                  v.vaultFile = r.filename;
+                  return DB.put('meta', { key: 'fullBackupInfo', value: v, updatedAt: Date.now() })
+                    .then(function () { bk4Status.textContent = fmtBk4(v); });
+                });
               }).catch(function () { /* full backup itself already succeeded */ });
             });
           }
@@ -251,12 +280,12 @@ Screens.setting = (function () {
     var expSyncBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
     expSyncBtn.addEventListener('click', function () {
       DB.exportAll({ media: 'since' }).then(function (data) {
-        UI.download('AFtrans-' + shortDate() + '.json', JSON.stringify(data));
+        /* v0.58 P7: the 'since' window advances only when the file was
+           actually handed over */
+        if (UI.download('AFtrans-' + shortDate() + '.json', JSON.stringify(data))) DB.stampExport();
       });
     });
-    /* v0.35.3: tell Alef WHERE the backup files live when importing */
-    bk.appendChild(UI.el('<div class="sub" style="margin:2px 0 6px">Import: pick the backup file from ' +
-      (canFs ? '<b>S26 › Documents › S26-Alef-Fit</b>' : 'your Downloads folder') + '.</div>'));
+    /* (the where-to-find-it text lives in the ? help sheet since v0.58) */
     var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup file</button>');
     var impFile = UI.el('<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">');
     impBtn.addEventListener('click', function () { impFile.click(); });
@@ -369,9 +398,8 @@ Screens.setting = (function () {
     });
     bk.appendChild(undoBtn);
 
-    /* ---- v0.57 A3: elective Drive mirror (Alef's ruling 2) ---- */
-    bk.appendChild(UI.el('<div class="sub" style="margin:12px 0 6px"><b>Drive mirror</b> — uploads a vault-free full backup to My Drive › Alef.Fit › Archives (keeps the newest 3).</div>'));
-    var mirBtn = UI.el('<button class="btn btn-block" style="margin-bottom:6px">' + UI.icon('upload') + ' Mirror backup to Drive</button>');
+    /* ---- v0.57 A3: elective Drive mirror (details in the ? help) ---- */
+    var mirBtn = UI.el('<button class="btn btn-block" style="margin:12px 0 6px">' + UI.icon('upload') + ' Mirror backup to Drive</button>');
     var mirStat = UI.el('<div class="sub bk-mir-stat"></div>');
     var mirRow = UI.el('<div class="sub" style="margin:4px 0 0">Remind after <input type="number" id="bk-mir-int" min="1" max="365" style="width:58px"> days without a mirror</div>');
     mirRow.querySelector('#bk-mir-int').value = s.mirrorIntervalDays || 30;
@@ -427,10 +455,8 @@ Screens.setting = (function () {
       advHead.textContent = advBox.classList.contains('hidden') ? 'Advanced backups ▸' : 'Advanced backups ▾';
     });
     bk.appendChild(advHead);
-    advBox.appendChild(UI.el('<div class="sub" style="margin:6px 0">Rarely needed — the two buttons above cover everything. These export smaller slices.</div>'));
     advBox.appendChild(bk1);
     advBox.appendChild(bk3);
-    advBox.appendChild(UI.el('<div class="sub" style="margin:2px 0 8px">Device transfer: all data + media added since the last export — for manual PC ↔ phone moves.</div>'));
     advBox.appendChild(expSyncBtn);
     bk.appendChild(advBox);
     var usage = UI.el('<div class="sub" style="margin-top:10px">Storage: …</div>');

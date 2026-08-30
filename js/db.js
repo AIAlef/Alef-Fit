@@ -233,8 +233,19 @@ var DB = (function () {
       if (p.recId === 'programCats') return saveProgramCats(p.data);
       return Promise.resolve();
     }
-    if (p.action === 'delete') return del(p.store, p.recId);
-    return put(p.store, p.data);
+    /* v0.58 P8: a proposal drafted BEFORE its target moved into the Vault
+       must never edit, move or delete the Vault entry (moving a task INTO
+       the vault via the reviewer's destination picker stays allowed) */
+    var pre = (p.store === 'todos' && p.recId) ? get('todos', p.recId) : Promise.resolve(null);
+    return pre.then(function (live) {
+      if (live && live.cat === 'vault' && !(p.data && p.data.cat === 'vault')) {
+        var e = new Error('target moved into the Vault — proposal skipped');
+        e.vaultSkip = true;
+        throw e;
+      }
+      if (p.action === 'delete') return del(p.store, p.recId);
+      return put(p.store, p.data);
+    });
   }
   function propSummary(p) {
     if (p.store === 'meta') {
@@ -396,7 +407,10 @@ var DB = (function () {
   function hydrateUrlList(vals) {
     return Promise.all((vals || []).map(function (v) {
       if (!v || v.slice(0, 5) === 'data:') return Promise.resolve(v);
-      return mediaUrl(v).then(function (u) { return u; });
+      /* v0.58 P6: when the blob has not arrived yet, keep the mediaId
+         instead of dropping the entry — hydration used to erase the ref
+         and a later Save persisted the loss to every device */
+      return mediaUrl(v).then(function (u) { return u || v; });
     })).then(function (r) { return r.filter(Boolean); });
   }
   function hydrateNote(n) {
@@ -443,8 +457,15 @@ var DB = (function () {
 
   /* remove media blobs no record references anymore */
   function gcMedia() {
-    return Promise.all([all('exercises'), all('notes'), all('media'), get('meta', 'undoSnapshot')]).then(function (r) {
+    return Promise.all([all('exercises'), all('notes'), all('media'), get('meta', 'undoSnapshot'), all('proposals')]).then(function (r) {
       var refs = {};
+      /* v0.58 P1: staged proposals (PC drafts / sent, not yet applied)
+         reference media too — GC used to eat a proposal's photo before
+         the S26 ever accepted it */
+      (r[4] || []).forEach(function (p) {
+        JSON.stringify(p.data || {}).replace(/"(m[0-9a-z]{6,})"/g, function (_, id) { refs[id] = 1; return _; });
+        ((p.data && p.data.media) || []).forEach(function (m) { if (m.mediaId) refs[m.mediaId] = 1; });
+      });
       var snap = r[3] && r[3].value && r[3].value.data && r[3].value.data.stores;
       if (snap) {
         (snap.exercises || []).forEach(function (x) {
@@ -553,7 +574,9 @@ var DB = (function () {
         return Promise.all(ps.filter(function (p) { return p.category === 'Bodybuilding'; })
           .map(function (p) { p.category = 'Maintenance'; return put('programs', p); }));
       }).then(function () {
-        return put('meta', { key: 'programCats', value: DEFAULT_PROGRAM_CATS.slice(), updatedAt: Date.now() });
+        /* v0.58 P3: seed defaults stamp 0, not now() — a fresh device's
+           defaults must never out-stamp the other seat's customized list */
+        return put('meta', { key: 'programCats', value: DEFAULT_PROGRAM_CATS.slice(), updatedAt: 0 });
       }).then(function () { return DEFAULT_PROGRAM_CATS.slice(); });
     });
   }
@@ -574,7 +597,8 @@ var DB = (function () {
     return get('meta', 'todoCats').then(function (row) {
       if (row) return row.value;
       var v = JSON.parse(JSON.stringify(DEFAULT_TODO_CATS));
-      return put('meta', { key: 'todoCats', value: v, updatedAt: Date.now() })
+      /* v0.58 P3: same zero-stamp rule as programCats */
+      return put('meta', { key: 'todoCats', value: v, updatedAt: 0 })
         .then(function () { return v; });
     });
   }
@@ -725,8 +749,15 @@ var DB = (function () {
         else out.stores.media = [];
       });
     }).then(function () {
-      if (mediaMode !== 'none') return put('meta', { key: 'lastExportAt', value: Date.now() });
-    }).then(function () { return out; });
+      /* v0.58 P7: the 'since' window advances ONLY when a caller confirms
+         the file was actually delivered (stampExport) — a cancelled or
+         failed download used to burn the window and later transfer files
+         silently missed that media forever. */
+      return out;
+    });
+  }
+  function stampExport() {
+    return put('meta', { key: 'lastExportAt', value: Date.now() });
   }
 
   /* Data-level migrations for old backup files: append steps as schema grows. */
@@ -803,6 +834,17 @@ var DB = (function () {
     var keepSize = _settings ? _settings.mediaSize : 'm';
     var vaultKeep = [];
     var vaultMetaKeep = [];
+    var draftKeep = [];
+    var tokenKeep = null;
+    /* v0.58 P2: a replace-restore keeps what the FILE can never give back
+       and what must never travel between devices: this device's identity
+       + role flags (DEVICE_KEYS — restoring an S26 file on the PC used to
+       clone the S26's deviceId/share role), its Google login, and any
+       unsent PC draft proposals (exports strip drafts). */
+    var devKeep = {};
+    DEVICE_KEYS.forEach(function (k) {
+      if (k !== '_ts' && _settings && _settings[k] !== undefined) devKeep[k] = _settings[k];
+    });
     /* Carry the local Vault across the wipe. A v0.49+ full backup may add
        its own vault rows too — on an id collision the LOCAL copy wins
        (vaultKeep is written last), everything else lands additively.
@@ -813,6 +855,10 @@ var DB = (function () {
       return all('meta');
     }).then(function (mrows) {
       vaultMetaKeep = mrows.filter(function (r) { return String(r.key).indexOf('vault') === 0; });
+      tokenKeep = mrows.find(function (r) { return r.key === 'gdriveRefreshToken'; }) || null;
+      return all('proposals');
+    }).then(function (prows) {
+      draftKeep = prows.filter(function (p) { return p.status === 'draft'; });
     });
     DATA_STORES.concat(['meta', 'tombstones']).forEach(function (s) {
       chain = chain.then(function () { return clear(s); }).then(function () {
@@ -828,9 +874,13 @@ var DB = (function () {
       return Promise.all(vaultKeep.map(function (r) { return putRaw('todos', r); }));
     }).then(function () {
       return Promise.all(vaultMetaKeep.map(function (r) { return putRaw('meta', r); }));
+    }).then(function () {
+      return Promise.all(draftKeep.map(function (p) { return putRaw('proposals', p); }));
+    }).then(function () {
+      if (tokenKeep) return putRaw('meta', tokenKeep);
     });
     return chain.then(function () { _mediaCache = {}; return loadSettings(); })
-      .then(function () { return saveSettings({ textScale: keepScale, mediaSize: keepSize }); })
+      .then(function () { return saveSettings(Object.assign({ textScale: keepScale, mediaSize: keepSize }, devKeep)); })
       .then(gcMedia)
       .then(function () { return { mode: 'replace' }; });
   }
@@ -1519,7 +1569,7 @@ var DB = (function () {
     mediaUrl: mediaUrl, internMedia: internMedia, internExMedia: internExMedia,
     hydrateExMedia: hydrateExMedia, hydrateNote: hydrateNote, internUrlList: internUrlList,
     migrateMediaStore: migrateMediaStore, gcMedia: gcMedia, mediaIdFor: mediaIdFor,
-    exportAll: exportAll, importAll: importAll, undoInfo: undoInfo, undoLastMerge: undoLastMerge,
+    exportAll: exportAll, stampExport: stampExport, importAll: importAll, undoInfo: undoInfo, undoLastMerge: undoLastMerge,
     buildClaudeShare: buildClaudeShare,
     exportVault: exportVault, importVault: importVault,
     proposalMode: proposalMode, listProposals: listProposals, sendProposals: sendProposals,
