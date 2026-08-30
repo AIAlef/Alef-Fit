@@ -3,7 +3,7 @@
    v0.58 C12: runtime-cached exercise photos live in their own UNVERSIONED
    cache (IMG_CACHE) that activate spares — a release used to delete every
    photo the user had browsed offline. */
-var CACHE = 'alef-fit-v0.59.0';
+var CACHE = 'alef-fit-v0.60.0';
 var IMG_CACHE = 'alef-fit-img';
 var ASSETS = [
   './', './index.html', './oauth.html', './css/app.css', './manifest.webmanifest',

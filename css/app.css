@@ -1364,3 +1364,7 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 .mv-card.mv-missed .mv-thumb { border-color: #c0564f; }
 .mv-card.mv-missed .mv-name { color: #d07a74; }
 .mv-loc.mv-inbox { background: rgba(120, 120, 120, .75); }
+
+/* ==== v0.60: mirror + (fix) the red warn color that v0.57 classes used ==== */
+.bk-warn { color: #e05d5d !important; }
+.mv-mirror .mv-mir-btn { margin-left: 6px; padding: 1px 10px; }

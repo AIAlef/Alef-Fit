@@ -631,7 +631,7 @@ window.Sync = (function () {
     try { body = new Blob([head, buf, tail]); }
     catch (e) { body = head + tail; /* jsdom only — real browsers take the Blob */ }
     return getToken().then(function () {
-      return api('files?uploadType=multipart&fields=id,name,mimeType,thumbnailLink', {
+      return api('files?uploadType=multipart&fields=id,name,mimeType,size,thumbnailLink', {
         method: 'POST', upload: true,
         headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
         body: body
@@ -659,6 +659,30 @@ window.Sync = (function () {
       })
       .then(function (id) { _dlFolderIds[parentId] = id; return id; });
   }
+  /* v0.60: per-file RETENTION mirror — My Drive › Alef.Fit ›
+     Collections-Mirror › <motiv|aesth>. Verified uploads become the second
+     home of the phone's primary copies. Folder ids cached per run. */
+  var _mrFolderIds = {};
+  function mirrorColFolder(sub) {
+    if (_mrFolderIds[sub]) return Promise.resolve(_mrFolderIds[sub]);
+    function ensure(name, pid) {
+      return findVisible("name='" + name + "' and mimeType='application/vnd.google-apps.folder' and '" + pid + "' in parents")
+        .then(function (f) {
+          if (f) return f.id;
+          return api('files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, mimeType: 'application/vnd.google-apps.folder', parents: [pid] })
+          }).then(function (r) { return r.id; });
+        });
+    }
+    return getToken()
+      .then(function () { return ensureShareFolder(); })
+      .then(function (rootId) { return ensure('Collections-Mirror', rootId); })
+      .then(function (cmId) { return ensure(sub, cmId); })
+      .then(function (id) { _mrFolderIds[sub] = id; return id; });
+  }
+
   function motivMove(fileId, fromFolderId) {
     return getToken().then(function () {
       return motivDownloadedFolder(fromFolderId);
@@ -733,6 +757,7 @@ window.Sync = (function () {
     /* v0.44 Fitness Motivation + v0.47 Aesthetic Collection (Drive folders) */
     motivList: motivList, motivPatch: motivPatch, motivBlob: motivBlob,
     motivThumb: motivThumb, motivUpload: motivUpload, motivMove: motivMove,
+    mirrorColFolder: mirrorColFolder,
     motivFolderId: motivFolderId, aesthFolderId: aesthFolderId,
     /* fresh consent popup — used when enabling Claude share (adds drive.file) */
     reconnect: function () { _token = null; return interactiveCode(); },

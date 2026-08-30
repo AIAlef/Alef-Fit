@@ -1152,7 +1152,7 @@ Screens.discipline = (function () {
   function renderMotiv(el) {
     renderCollection(el, {
       title: 'Fitness Motivation', metaKey: 'motivList', noun: 'video',
-      mime: 'video/', folderId: function () { return Sync.motivFolderId(); }
+      mime: 'video/', mirrorSub: 'motiv', folderId: function () { return Sync.motivFolderId(); }
     });
   }
   /* v0.47: Aesthetic Collection — same machinery, images instead of videos.
@@ -1160,7 +1160,7 @@ Screens.discipline = (function () {
   function renderAesth(el) {
     renderCollection(el, {
       title: 'Aesthetic Collection', metaKey: 'aesthList', noun: 'image',
-      mime: 'image/', cols: 3, folderId: function () { return Sync.aesthFolderId(); }
+      mime: 'image/', cols: 3, mirrorSub: 'aesth', folderId: function () { return Sync.aesthFolderId(); }
     });
   }
 
@@ -1242,8 +1242,32 @@ Screens.discipline = (function () {
     pad.appendChild(addFile);
     if (isPC) pad.appendChild(UI.el('<div class="sub" style="margin-bottom:6px">View only on the PC — this collection is managed on the S26.</div>'));
     /* v0.59: how much of the collection lives on this phone */
-    var sizeLine = UI.el('<div class="sub mv-size" style="margin-bottom:6px"></div>');
+    var sizeLine = UI.el('<div class="sub mv-size" style="margin-bottom:2px"></div>');
     pad.appendChild(sizeLine);
+    /* v0.60: per-file Drive mirror — the retention copy of the phone's
+       primary files (S26 only; red past mirrorIntervalDays) */
+    var mirRow = null;
+    if (!isPC) {
+      mirRow = UI.el('<div class="sub mv-mirror" style="margin-bottom:8px"><span class="mv-mir-stat"></span>' +
+        '<button type="button" class="chip mv-mir-btn">Mirror now</button></div>');
+      mirRow.querySelector('.mv-mir-btn').addEventListener('click', function () { runMirror(); });
+      pad.appendChild(mirRow);
+    }
+    function paintMirror() {
+      if (!mirRow || !mirRow.isConnected) return;
+      var statEl = mirRow.querySelector('.mv-mir-stat');
+      var eligible = items.filter(function (x) { return x.state === 'stored' && stored[x.id] && x.rating !== 'X'; });
+      var done = eligible.filter(function (x) { return x.mirrorId; }).length;
+      DB.get('meta', cfg.metaKey + 'MirrorAt').then(function (r) {
+        var at = r && r.value;
+        var iv = (DB.getSettings() || {}).mirrorIntervalDays || 30;
+        var behind = done < eligible.length;
+        var overdue = behind && (!at || (Date.now() - at) > iv * 86400000);
+        statEl.textContent = 'Drive mirror: ' + done + '/' + eligible.length +
+          (at ? ' · last ' + new Date(at).toLocaleDateString('en-GB') : ' · never');
+        statEl.classList.toggle('bk-warn', overdue);
+      });
+    }
     var wrap = UI.el('<div></div>');
     pad.appendChild(wrap);
 
@@ -1309,7 +1333,12 @@ Screens.discipline = (function () {
       var chain = Promise.resolve();
       todo.forEach(function (it) {
         chain = chain.then(function () {
-          return Sync.motivBlob(it.id).then(function (b) {
+          return Sync.motivBlob(it.id).catch(function (eB) {
+            /* v0.60: the original is gone (new phone / emptied Drive) —
+               fall back to the MIRROR copy */
+            if (it.mirrorId) return Sync.motivBlob(it.mirrorId);
+            throw eB;
+          }).then(function (b) {
             return blobBuf(b).then(function (buf) {
               return DB.put('motivVideos', {
                 id: it.id, buf: buf, type: b.type || (cfg.mime === 'image/' ? 'image/jpeg' : 'video/mp4'),
@@ -1363,6 +1392,57 @@ Screens.discipline = (function () {
           if (!todo.length && !pendingMoves) return;
           runIngest(todo, true);
         });
+      });
+    }
+    /* v0.60: verified per-file mirror run — uploads every stored,
+       not-yet-mirrored file into Collections-Mirror/<sub>; an item is
+       `mirrored` ONLY when Drive confirms the exact byte count. */
+    var _mrBusy = false;
+    function runMirror() {
+      if (_mrBusy || isPC) return;
+      var statEl = mirRow && mirRow.querySelector('.mv-mir-stat');
+      var todo = items.filter(function (x) { return x.state === 'stored' && stored[x.id] && x.rating !== 'X' && !x.mirrorId; });
+      if (!todo.length) {
+        DB.put('meta', { key: cfg.metaKey + 'MirrorAt', value: Date.now() }).then(function () {
+          UI.toast('Mirror is complete ✓');
+          paintMirror();
+        });
+        return;
+      }
+      _mrBusy = true;
+      var upped = 0, fails = 0;
+      Sync.mirrorColFolder(cfg.mirrorSub).then(function (fid) {
+        var chain = Promise.resolve();
+        todo.forEach(function (it, i2) {
+          chain = chain.then(function () {
+            if (statEl) statEl.textContent = 'Mirroring ' + (i2 + 1) + '/' + todo.length + '…';
+            return DB.get('motivVideos', it.id).then(function (row) {
+              if (!row || !row.buf) return null;
+              return Sync.motivUpload(mvDriveName(it), it.mime || row.type, row.buf, fid).then(function (res) {
+                var want = row.buf.byteLength || row.size || 0;
+                if (res && res.id && parseInt(res.size, 10) === want) {
+                  it.mirrorId = res.id; /* verified — byte count confirmed by Drive */
+                  upped++;
+                } else {
+                  fails++; /* size mismatch / no id — stays unmirrored, retried next run */
+                }
+              });
+            }).catch(function () { fails++; });
+          });
+        });
+        return chain.then(function () {
+          return DB.put('meta', { key: cfg.metaKey + 'MirrorAt', value: Date.now() });
+        }).then(save).then(function () {
+          _mrBusy = false;
+          UI.toast(fails
+            ? 'Mirrored ' + upped + ' — ' + fails + ' failed, tap Mirror now again to retry'
+            : 'Mirror complete ✓ — ' + upped + ' file' + (upped === 1 ? '' : 's') + ' uploaded');
+          if (wrap.isConnected) draw();
+        });
+      }).catch(function (e) {
+        _mrBusy = false;
+        UI.toast(hintFor(e));
+        paintMirror();
       });
     }
     /* ⬇ button: manual full download (also re-fetches lost local copies) */
@@ -1646,6 +1726,11 @@ Screens.discipline = (function () {
             return Sync.motivPatch(it.id, { trashed: true }).catch(function (eT) {
               if (!/404/.test(String((eT && eT.message) || eT))) throw eT;
             }).then(function () {
+              /* v0.60: the MIRROR copy goes to Drive trash too */
+              return it.mirrorId
+                ? Sync.motivPatch(it.mirrorId, { trashed: true }).catch(function () { /* 404 ok */ })
+                : null;
+            }).then(function () {
               items = items.filter(function (x) { return x.id !== it.id; });
               return DB.del('motivVideos', it.id); /* v0.46: free its phone copy too */
             }).catch(function () { fails++; });
@@ -1674,6 +1759,7 @@ Screens.discipline = (function () {
         }
         drawBody();
         fillLocalThumbs();
+        paintMirror(); /* v0.60 */
       }).catch(drawBody);
     }
     /* v0.56: default covers from the LOCAL copies — a stored video with no
