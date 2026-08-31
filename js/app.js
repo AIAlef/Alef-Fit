@@ -1,7 +1,7 @@
 /* Alef.Fit — boot, router, nav, theme/text-size, in-app alert ticker. */
 'use strict';
 
-var APP_VERSION = '0.65.0';
+var APP_VERSION = '0.66.0';
 
 var App = (function () {
 

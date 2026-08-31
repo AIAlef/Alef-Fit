@@ -1074,7 +1074,7 @@ var DB = (function () {
   function buildClaudeShare() {
     var s = _settings || {};
     var out = {
-      app: 'alef.fit', kind: 'claude-share', shareVersion: 1,
+      app: 'alef.fit', kind: 'claude-share', shareVersion: 3,
       appVersion: window.APP_VERSION || '0',
       generatedAt: new Date().toISOString(),
       shared: { tasks: s.claudeShareTodo !== false, workout: s.claudeShareWorkout !== false }
@@ -1096,6 +1096,10 @@ var DB = (function () {
               nowAt: t.nowAt || null, locked: !!t.locked,
               priority: t.prio || 'none', done: !!t.done, note: t.note || '',
               dueDate: t.dueDate || null, time: t.time || null,
+              /* v0.66 share v3 (protocol G2): Lucilius sees the schedule
+                 (TOMORROW queue) and habit streaks */
+              startDate: t.startDate || null, startTime: t.startTime || null,
+              habitCount: t.habitCount || 0,
               tags: (t.tags || []).map(function (id) { return tagName[id]; }).filter(Boolean),
               subtasks: (t.subs || []).map(function (x) { return { title: x.title, done: !!x.done }; }),
               updatedAt: t.updatedAt ? new Date(t.updatedAt).toISOString() : null
@@ -1371,6 +1375,19 @@ var DB = (function () {
     });
   }
 
+  /* v0.66 protocol v3 (G2): ops may carry schedule {date:'YYYY-MM-DD',
+     time:'HH:MM'?} → the task gets a scheduled start and surfaces in
+     TOMORROW/TODAY exactly like a hand-entered one (promoteNowDue treats
+     a missing time as 08:00); schedule:null clears it. Invalid shapes are
+     ignored (the rest of the op still applies). */
+  function claudeSchedule(rec, sch) {
+    if (sch === null) { rec.startDate = null; rec.startTime = null; return; }
+    if (!sch || typeof sch !== 'object') return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sch.date || ''))) return;
+    rec.startDate = sch.date;
+    rec.startTime = /^\d{2}:\d{2}$/.test(String(sch.time || '')) ? sch.time : null;
+  }
+
   /* ---- Claude suggestions inbox → proposals (reviewed on the S26) ----
      File written by the Claude secretary (docs/CLAUDE-INBOX.md). Every
      suggestion becomes a normal proposal (by 'Claude', status 'sent');
@@ -1417,6 +1434,7 @@ var DB = (function () {
                 subs: (sg.subtasks || []).slice(0, 15).map(function (st2) { return { id: uid(), title: String(st2).slice(0, 200), done: false }; }),
                 done: false, createdAt: Date.now()
               };
+              if (sg.schedule !== undefined) claudeSchedule(rec, sg.schedule); /* v0.66 protocol v3 */
               return prop('todos', 'add', rec, rec.id, 0);
             }
             if (sg.kind === 'alarm') {
@@ -1444,6 +1462,10 @@ var DB = (function () {
               if (set.priority) copy.prio = set.priority;
               if (set.nowAt !== undefined) copy.nowAt = set.nowAt || null;
               if (set.now != null) copy.now = !!set.now;
+              /* v0.66 protocol v3: schedule rides in set.schedule (or the
+                 op top level) — null clears the scheduled start */
+              if (set.schedule !== undefined) claudeSchedule(copy, set.schedule);
+              else if (sg.schedule !== undefined) claudeSchedule(copy, sg.schedule);
             } else if (sg.kind === 'subtasks') {
               copy.subs = (copy.subs || []).concat((sg.add || []).slice(0, 15).map(function (st3) {
                 return { id: uid(), title: String(st3).slice(0, 200), done: false };
@@ -1502,14 +1524,16 @@ var DB = (function () {
               if (!sg.title) { counts.skipped++; return; }
               var cat = okCat[sg.list] ? sg.list : 'later';
               counts.applied++;
-              return putRaw('todos', stamp({
+              var recNew = {
                 id: uid(), title: String(sg.title).slice(0, 200), cat: cat,
                 now: !!sg.now, nowAt: sg.nowAt || null,
                 prio: sg.priority || 'none', note: String(sg.note || '').slice(0, 1000),
                 tags: (sg.tags || []).map(function (n) { return tagIdByName[String(n).toLowerCase()]; }).filter(Boolean),
                 subs: (sg.subtasks || []).slice(0, 15).map(function (st2) { return { id: uid(), title: String(st2).slice(0, 200), done: false }; }),
                 done: false, createdAt: Date.now()
-              }));
+              };
+              if (sg.schedule !== undefined) claudeSchedule(recNew, sg.schedule); /* v0.66 protocol v3 */
+              return putRaw('todos', stamp(recNew));
             }
             if (sg.kind === 'alarm') {
               if (!sg.time) { counts.skipped++; return; }
@@ -1538,6 +1562,10 @@ var DB = (function () {
               if (set.priority) copy.prio = set.priority;
               if (set.nowAt !== undefined) copy.nowAt = set.nowAt || null;
               if (set.now != null) copy.now = !!set.now;
+              /* v0.66 protocol v3: schedule rides in set.schedule (or the
+                 op top level) — null clears the scheduled start */
+              if (set.schedule !== undefined) claudeSchedule(copy, set.schedule);
+              else if (sg.schedule !== undefined) claudeSchedule(copy, sg.schedule);
             } else if (sg.kind === 'subtasks') {
               copy.subs = (copy.subs || []).concat((sg.add || []).slice(0, 15).map(function (st3) {
                 return { id: uid(), title: String(st3).slice(0, 200), done: false };
