@@ -101,37 +101,35 @@ window.Sync = (function () {
     return opener.then(function () {
       return new Promise(function (resolve, reject) {
         var body = UI.el('<div><p class="sub">Google opened in your browser. Approve access there and tap ' +
-          '<b>Copy code — return to Alef.Fit</b> on the last page. Back here the code fills in by itself (or tap Paste):</p>' +
+          '<b>Copy code</b> on the last page, then come back and paste it here (long-press the box → Paste). ' +
+          'If the box fills in by itself, even better:</p>' +
           UI.field('Code from Google', '<input type="text" id="oa-code" autocomplete="off" autocapitalize="off">') +
-          '<button type="button" class="chip" id="oa-paste">Paste</button></div>');
+          '</div>');
         var inp = body.querySelector('#oa-code');
-        /* v0.61 (#86): oauth.html copies the code — read the clipboard
-           when Alef returns (focus/visibility) and fill the box. Best
-           effort: a WebView may refuse clipboard reads, so the Paste
-           button and long-press paste stay as manual paths. */
-        function tryFill(fromTap) {
+        /* v0.61 (#86): oauth.html copies the code — best-effort clipboard
+           read when Alef returns (focus/visibility) fills the box.
+           v0.64: the Paste BUTTON is gone (WebView refused clipboard
+           reads on tap — a dead button); long-press paste in the input
+           is the reliable manual path. */
+        function tryFill() {
           try {
             if (!navigator.clipboard || !navigator.clipboard.readText) return;
             navigator.clipboard.readText().then(function (t) {
               t = String(t || '').trim();
-              if (!oauthCodeLooksValid(t)) {
-                if (fromTap) UI.toast('No Google code on the clipboard — tap Copy code on the Google page first');
-                return;
-              }
-              if (inp.value && !fromTap) return; /* never overwrite a typed code */
+              if (!oauthCodeLooksValid(t)) return;
+              if (inp.value) return; /* never overwrite a typed code */
               inp.value = t;
               UI.toast('Code pasted ✓ — tap Connect');
-            }).catch(function () { /* refused — manual paste still works */ });
+            }).catch(function () { /* refused — long-press paste works */ });
           } catch (e) { /* ok */ }
         }
-        function onVis() { if (!document.hidden) setTimeout(function () { tryFill(false); }, 250); }
+        function onVis() { if (!document.hidden) setTimeout(tryFill, 250); }
         document.addEventListener('visibilitychange', onVis);
         window.addEventListener('focus', onVis);
         function unhook() {
           document.removeEventListener('visibilitychange', onVis);
           window.removeEventListener('focus', onVis);
         }
-        body.querySelector('#oa-paste').addEventListener('click', function () { tryFill(true); });
         UI.modal('Google sign-in', body, [
           { label: 'Cancel', onClick: function (close) { unhook(); close(); reject(new Error('Sign-in cancelled')); } },
           {

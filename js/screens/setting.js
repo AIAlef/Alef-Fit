@@ -123,11 +123,11 @@ Screens.setting = (function () {
         ? '⚠ Update the app (apk-latest) to enable saving files.'
         : 'Files go to the browser\'s Downloads folder.');
     var BK_HELP =
-      '<p><b>Full backup</b> — everything incl. media + Vault → <b>AFbak-DDMMYY.json</b>; the dated Vault file <b>AFvault-DDMMYY.AFdd</b> writes with it. One file per day (a re-run overwrites).</p>' +
-      '<p><b>Vault backup</b> — the Vault alone (.AFdd). Monthly: copy the dated file to USB.</p>' +
+      '<p><b>ONE file</b> (v0.65) — <b>AFbak-DDMMYY.json</b> holds EVERYTHING: data, media, settings and the <b>Vault</b>. One file per day (a re-run overwrites). Weekly tap + occasional USB copy = fully covered.</p>' +
+      '<p><b>Vault safety net</b> — automatic: <b>AFvault-current.AFdd</b> rewrites itself ~10 s after every Vault change and survives reinstalls. Nothing to manage; old AFvault files still import via Alef.do → Vault 🔒 → Import.</p>' +
       '<p><b>Where:</b> ' + whereTxt + '</p>' +
       '<p><b>Import</b> — restores ANY backup file, old long names included (the type is detected). <b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.</p>' +
-      '<p><b>New phone</b> — "Import to new phone (Full + Vault)" here, or the Setup wizard\'s ⚡ one-stop restore.</p>' +
+      '<p><b>New phone</b> — "Import to new phone" here (one AFbak file), or the Setup wizard\'s ⚡ one-stop restore.</p>' +
       '<p><b>Drive mirror</b> — uploads a VAULT-FREE full backup to My Drive › Alef.Fit › Archives (keeps the newest 3). The line turns RED past your reminder interval.</p>' +
       '<p><b>Advanced</b> — rare small exports: connection settings (AFinfo), tasks only (AFtodo), PC ↔ phone transfer (AFtrans).</p>';
     var bkHead = UI.el('<div class="section-title">Backup <button type="button" class="btn-icon sm bk-help" aria-label="How backup works">' + UI.icon('help') + '</button></div>');
@@ -153,23 +153,8 @@ Screens.setting = (function () {
         UI.download('AFinfo-' + shortDate() + '.json', JSON.stringify(data, null, 2));
       });
     });
-    /* Vault backup (S26 only) — dated .AFdd, serial, 30-day timer.
-       v0.57 C3/C4: guarded against double-tap; failure reports honestly. */
-    var bk2 = null;
-    if ((s.deviceId || '') !== 'PC') {
-      bk2 = bkBtn('Vault backup (.AFdd)');
-      bk2.addEventListener('click', function () {
-        if (bk2.disabled) return;
-        bk2.disabled = true;
-        VaultKeep.backupNow().then(function (r) {
-          bk2.disabled = false;
-          UI.toast('Vault backup #' + VaultKeep.fmtSerial(r.serial) + ' — ' + r.filename);
-        }).catch(function (e2) {
-          bk2.disabled = false;
-          UI.toast('⚠ ' + String(e2 && e2.message || e2));
-        });
-      });
-    }
+    /* v0.65 (Alef's ruling): the separate Vault backup button is GONE —
+       the Vault rides the Full backup; the rolling mirror is automatic. */
     /* Alef.do tasks only (Advanced fold) */
     var bk3 = bkBtn('Alef.do tasks (no Vault)');
     bk3.addEventListener('click', function () {
@@ -189,7 +174,8 @@ Screens.setting = (function () {
         return '⚠ Last attempt ' + new Date(info.at).toLocaleString('en-GB') + ' FAILED — ' +
           (info.error || 'unknown error');
       }
-      /* v0.58 (Alef's ask): show WHERE + BOTH filenames (data + Vault) */
+      /* v0.58: show WHERE + the filename. v0.65: ONE file — the Vault is
+         inside the AFbak, so no second filename to append. */
       var loc, file;
       if (info.path) {
         var cut = info.path.lastIndexOf('/');
@@ -200,7 +186,7 @@ Screens.setting = (function () {
         file = 'AFbak file';
       }
       return '✓ Current backup: ' + new Date(info.at).toLocaleString('en-GB') + ' · ' + info.mb + ' MB\n' +
-        loc + ' — ' + file + (info.vaultFile ? ' + ' + info.vaultFile : '');
+        loc + ' — ' + file + ' (Vault inside)';
     }
     /* v0.57 A2: staleness nudge — quiet while ≤ 7 days, red beyond */
     var bk4Age = UI.el('<div class="sub bk4-age" style="margin:0 0 8px"></div>');
@@ -234,23 +220,9 @@ Screens.setting = (function () {
           paintAge(info);
           if (!ok) return;
           DB.stampExport(); /* v0.58 P7: a delivered full backup advances the 'since' window */
-          /* v0.52 (plan decision 6): the Full backup ALSO writes the dated
-             Vault .AFdd — serial bumps and the 30-day timer resets */
-          if ((DB.getSettings().deviceId || '') !== 'PC' && window.VaultKeep) {
-            DB.all('todos').then(function (rows) {
-              if (!rows.some(function (r) { return r.cat === 'vault'; })) return;
-              VaultKeep.backupNow().then(function (r) {
-                UI.toast('Vault .AFdd #' + VaultKeep.fmtSerial(r.serial) + ' written too');
-                /* v0.58: the Vault filename joins the status line, persisted */
-                return DB.get('meta', 'fullBackupInfo').then(function (fi) {
-                  var v = (fi && fi.value) || info;
-                  v.vaultFile = r.filename;
-                  return DB.put('meta', { key: 'fullBackupInfo', value: v, updatedAt: Date.now() })
-                    .then(function () { bk4Status.textContent = fmtBk4(v); });
-                });
-              }).catch(function () { /* full backup itself already succeeded */ });
-            });
-          }
+          /* v0.65 (Alef's ruling): ONE file — the dated .AFdd piggyback is
+             gone; the Vault is inside the AFbak, and the automatic rolling
+             AFvault-current.AFdd keeps covering the gaps between backups. */
         }
         if (window.Native && Native.isNative && Native.isNative() &&
             Native.canSaveFiles && Native.canSaveFiles()) {
@@ -275,7 +247,6 @@ Screens.setting = (function () {
     bk.appendChild(bk4);
     bk.appendChild(bk4Status);
     bk.appendChild(bk4Age);
-    if (bk2) bk.appendChild(bk2);
     /* device transfer moved into the Advanced fold (v0.57 ruling 8) */
     var expSyncBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Export sync file</button>');
     expSyncBtn.addEventListener('click', function () {
@@ -374,7 +345,7 @@ Screens.setting = (function () {
     bk.appendChild(impBtn);
     bk.appendChild(impFile);
     /* v0.53: real full restore for a NEW phone — both files in one go */
-    var impBothBtn = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('upload') + ' Import to new phone (Full + Vault)</button>');
+    var impBothBtn = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('upload') + ' Import to new phone (one AFbak file)</button>');
     impBothBtn.addEventListener('click', function () {
       RestoreFlow.open(function () { App.route(); });
     });
@@ -752,9 +723,9 @@ Screens.setting = (function () {
     infoEntry('Backup guide', 'Which file, when — by situation',
       /* v0.53: rewritten per Alef — concise, one line per real situation */
       '<table class="info-table"><tr><th>Situation</th><th>What to do</th></tr>' +
-      '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>⚡ One-stop restore</b>: pick AFbak-….json + AFvault-….AFdd — sign-in, Full Sync and the S26 claim chain by themselves.</td></tr>' +
-      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>Full backup</b> — writes AFbak-….json AND the dated AFvault-….AFdd together; the lines under the button show status + age.</td></tr>' +
-      '<tr><td><b>Secure the Vault</b></td><td>The rolling mirror (AFvault-current) updates by itself. Monthly: Vault 🔒 → <b>Backup now</b> → copy the dated .AFdd to USB. The Vault NEVER rides the cloud.</td></tr>' +
+      '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>⚡ One-stop restore</b>: the newest AFbak-….json is picked for you (Vault inside) — sign-in, Full Sync and the S26 claim chain by themselves.</td></tr>' +
+      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>Full backup</b> — ONE file, AFbak-….json, Vault included; the lines under the button show status + age. Occasionally copy it to USB.</td></tr>' +
+      '<tr><td><b>Secure the Vault</b></td><td>Automatic: it rides every Full backup, and the rolling AFvault-current.AFdd rewrites itself ~10 s after every change. The Vault NEVER rides the cloud.</td></tr>' +
       '<tr><td><b>Long retention</b></td><td><b>Mirror backup to Drive</b> — a vault-free AFbak copy into My Drive › Alef.Fit › Archives; the line turns RED past your interval (default 30 d).</td></tr>' +
       '<tr><td><b>Device transfer</b><br>(PC ↔ phone)</td><td>Advanced → Export <b>sync file</b> (AFtrans, small) → Import → <b>Merge</b> on the other device. Daily changes travel by <b>Sync now</b> instead.</td></tr></table>' +
       '<div class="sub" style="margin:6px 0"><b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.<br>' +
@@ -968,111 +939,109 @@ Screens.setting = (function () {
 
   return { render: render };
 })();
-
-/* ==== v0.53: RestoreFlow — REAL full import for a new S26 ====
-   One dialog, TWO clearly-labeled file panels (Full backup + Vault
-   backup), each showing the chosen file's name and date/time. Cancel or
-   the ✕ backs out at any point; Import runs both restores in order.
-   Used from Setting → Backup and from the first-run Setup wizard. */
+/* ==== v0.53 RestoreFlow, leaned in v0.65 (Alef's ruling) ====
+   ONE dialog, ONE file: the newest AFbak-DDMMYY.json restores
+   EVERYTHING — data, media, settings and the Vault (Full backups carry
+   it since v0.49). Newest-first list with auto-pick (v0.61), filename
+   probes when the folder is unlistable (v0.64), system picker as the
+   always-works fallback. Old AFvault-….AFdd files import via
+   Alef.do → Vault 🔒 → Import backup. Used from Setting → Backup and
+   the first-run Setup wizard. */
 'use strict';
 
 window.RestoreFlow = (function () {
-
-  function panel(no, title, hint) {
-    return UI.el('<div class="rw-panel">' +
-      '<div class="rw-head">' + no + ' · ' + title + '</div>' +
-      '<div class="rw-file sub">' + hint + '</div>' +
-      '<div class="rw-list"></div>' +
-      '<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">' +
-      '</div>');
-  }
 
   function fmtWhen(json, ms) {
     var iso = (json && (json.exportedAt || json.at)) || null;
     var d = iso ? new Date(iso) : (ms ? new Date(ms) : null);
     return d ? d.toLocaleString('en-GB') : '(no date)';
   }
-  /* v0.61 (#86): which files belong in which panel — the NAME only builds
-     the list; the CONTENT is still verified on every selection */
-  function nameMatches(wantFull, name) {
+  function nameMatches(name) {
     if (/\.part$/i.test(name)) return false;
-    return wantFull
-      ? (/^AFbak-.*\.json$/i.test(name) || /full-backup.*\.json$/i.test(name))
-      : (/\.AFdd$/i.test(name) || /^A-FiT/i.test(name));
+    return /^AFbak-.*\.json$/i.test(name) || /full-backup.*\.json$/i.test(name);
   }
 
   function open(onDone) {
-    var picked = { full: null, vault: null };
-    var body = UI.el('<div><p class="sub">Restore in ONE go — the newest backup is ' +
-      'pre-selected (tap another row to change), then Import. ' +
+    var picked = null; /* { json, name, vaultN } */
+    var body = UI.el('<div><p class="sub">Restore in ONE go — the newest <b>AFbak</b> file is pre-selected ' +
+      '(tap another row to change), then Import. One file holds EVERYTHING: data, media, settings and the Vault. ' +
       'The files live in <b>Documents › S26-Alef-Fit</b> (or Downloads / your USB copy).</p></div>');
-    var pFull = panel('1', 'Full backup', 'Tap to choose… (AFbak-DDMMYY.json — older alef-fit-4-full-backup files work too)');
-    var pVault = panel('2', 'Vault backup (optional)', 'Tap to choose… (AFvault-….AFdd — older A-FiT-DD files work too)');
+    var pFull = UI.el('<div class="rw-panel">' +
+      '<div class="rw-head">Full backup (AFbak-DDMMYY.json)</div>' +
+      '<div class="rw-file sub">Tap to choose… (older alef-fit-4-full-backup files work too)</div>' +
+      '<div class="rw-list"></div>' +
+      '<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">' +
+      '</div>');
     body.appendChild(pFull);
-    body.appendChild(pVault);
-    var footNote = UI.el('<p class="sub" style="margin-top:6px">The Vault file is OPTIONAL — pick one only to bring ' +
-      'Vault entries onto a phone that has none (imported entries are added as dated copies, never merged).</p>');
-    body.appendChild(footNote);
+    body.appendChild(UI.el('<p class="sub" style="margin-top:6px">A fresh install starts empty — your data is NOT lost. ' +
+      'Old AFvault-….AFdd files (the retired second file) import any time via Alef.do → Vault 🔒 → Import backup.</p>'));
     var nativeList = null; /* set when the app can read the folder itself */
-    /* v0.62 (#89, Alef's ruling): most restores are an UPDATED app on the
-       same S26 — the Vault is already there. The vault panel auto-selects
-       ONLY when this device has NO vault entries (true new phone); with
-       entries present it stays untouched unless Alef picks a file. */
-    var vaultCount = 0, vaultKnown = false;
 
-    function accept(p, key, wantFull, srcName, whenMs, raw) {
-      var lbl = p.querySelector('.rw-file');
+    function accept(srcName, whenMs, raw) {
+      var lbl = pFull.querySelector('.rw-file');
       return VaultKeep.parseBackup(raw).catch(function () { return null; }).then(function (json) {
         var isVault = !!(json && json.kind === 'vault-backup');
         var isFull = !!(json && json.app === 'alef.fit' && json.stores);
-        if (!json || (wantFull && !isFull) || (!wantFull && !isVault)) {
-          picked[key] = null;
-          p.classList.remove('rw-ok');
-          p.classList.add('rw-bad');
-          lbl.innerHTML = '⚠ "' + UI.esc(srcName) + '" is not a ' + (wantFull ? 'Full backup' : 'Vault backup') + ' file — choose again';
+        if (isVault) {
+          picked = null;
+          pFull.classList.remove('rw-ok');
+          pFull.classList.add('rw-bad');
+          lbl.innerHTML = '⚠ "' + UI.esc(srcName) + '" is a Vault-only file — import it via ' +
+            'Alef.do → Vault 🔒 → Import backup. Pick an AFbak file here.';
           return false;
         }
-        picked[key] = { json: json, name: srcName };
-        p.classList.remove('rw-bad');
-        p.classList.add('rw-ok');
+        if (!isFull) {
+          picked = null;
+          pFull.classList.remove('rw-ok');
+          pFull.classList.add('rw-bad');
+          lbl.innerHTML = '⚠ "' + UI.esc(srcName) + '" is not a Full backup file — choose again';
+          return false;
+        }
+        /* v0.64: say whether the Vault rides inside this file */
+        var vn = json.vaultIncluded
+          ? ((json.stores.todos || []).filter(function (r) { return r && r.cat === 'vault'; }).length)
+          : 0;
+        picked = { json: json, name: srcName, vaultN: vn };
+        pFull.classList.remove('rw-bad');
+        pFull.classList.add('rw-ok');
         lbl.innerHTML = '✓ <b>' + UI.esc(srcName) + '</b><br>' + UI.esc(fmtWhen(json, whenMs)) +
-          (wantFull ? '' : ' · ' + ((json.vault || []).length) + ' entries');
-        p.querySelectorAll('.rw-row').forEach(function (rw) {
+          (vn ? ' · <b>Vault inside (' + vn + ' entr' + (vn === 1 ? 'y' : 'ies') + ')</b>'
+              : ' · no Vault in this file');
+        pFull.querySelectorAll('.rw-row').forEach(function (rw) {
           rw.classList.toggle('on', rw.dataset.name === srcName);
         });
         return true;
       });
     }
 
-    function wire(p, key, wantFull) {
-      var inp = p.querySelector('input');
-      p.addEventListener('click', function (e) {
-        if (nativeList) return; /* the file rows do the picking */
-        if (e.target !== inp) inp.click();
-      });
-      inp.addEventListener('change', function (e) {
-        var f = e.target.files[0];
-        if (!f) return;
-        var fr = new FileReader();
-        fr.onload = function () { accept(p, key, wantFull, f.name, f.lastModified, fr.result); };
-        fr.readAsArrayBuffer(f);
-        e.target.value = '';
-      });
-    }
-    wire(pFull, 'full', true);
-    wire(pVault, 'vault', false);
+    var inp = pFull.querySelector('input');
+    pFull.addEventListener('click', function (e) {
+      if (nativeList) return; /* the file rows do the picking */
+      if (e.target !== inp) inp.click();
+    });
+    inp.addEventListener('change', function (e) {
+      var f = e.target.files[0];
+      if (!f) return;
+      var fr = new FileReader();
+      fr.onload = function () { accept(f.name, f.lastModified, fr.result); };
+      fr.readAsArrayBuffer(f);
+      e.target.value = '';
+    });
 
-    /* v0.61 (#86): on the APK each panel lists the folder's matching
-       files NEWEST FIRST and pre-selects the newest one that validates;
-       the system picker stays one tap away for files living elsewhere. */
-    function buildList(p, key, wantFull, autoPick) {
-      var cands = nativeList.filter(function (f) { return nameMatches(wantFull, f.name); });
-      var box = p.querySelector('.rw-list');
+    function addPickerRow(box) {
+      var more = UI.el('<button type="button" class="rw-row rw-more">📂 Choose another file…</button>');
+      more.addEventListener('click', function (ev) { ev.stopPropagation(); inp.click(); });
+      box.appendChild(more);
+    }
+    /* v0.61: newest-first rows + auto-pick of the newest that VALIDATES */
+    function buildList() {
+      var cands = nativeList.filter(function (f) { return nameMatches(f.name); });
+      var box = pFull.querySelector('.rw-list');
       box.innerHTML = '';
       function pickRow(f) {
         return Native.readBackupFile(f.name).then(function (raw) {
           if (!raw) return false;
-          return accept(p, key, wantFull, f.name, f.mtime, raw);
+          return accept(f.name, f.mtime, raw);
         });
       }
       cands.slice(0, 6).forEach(function (f) {
@@ -1082,63 +1051,89 @@ window.RestoreFlow = (function () {
         row.addEventListener('click', function (ev) { ev.stopPropagation(); pickRow(f); });
         box.appendChild(row);
       });
-      var more = UI.el('<button type="button" class="rw-row rw-more">📂 Choose another file…</button>');
-      more.addEventListener('click', function (ev) { ev.stopPropagation(); p.querySelector('input').click(); });
-      box.appendChild(more);
-      if (!autoPick) return;
-      var i = 0; /* auto-select: newest candidate that VALIDATES (tries 3) */
+      addPickerRow(box);
+      var i = 0;
       function tryNext() {
-        if (i >= Math.min(3, cands.length)) return null;
+        if (i >= Math.min(3, cands.length)) {
+          /* v0.64: every candidate failed to READ — normal right after a
+             reinstall. Say the truth instead of spinning forever. */
+          if (!picked) {
+            pFull.querySelector('.rw-file').innerHTML =
+              '⚠ This install can\'t read the files here directly yet (normal after a reinstall) — ' +
+              'your backups ARE in the folder: tap <b>📂 Choose another file…</b> and pick the newest one there.';
+          }
+          return null;
+        }
         var f = cands[i++];
         return pickRow(f).then(function (okd) { return okd ? null : tryNext(); });
       }
       if (cands.length) {
-        p.querySelector('.rw-file').textContent = 'Checking newest file…';
+        pFull.querySelector('.rw-file').textContent = 'Checking newest file…';
         tryNext();
       }
     }
-    DB.all('todos').then(function (rows) {
-      vaultCount = rows.filter(function (r) { return r.cat === 'vault'; }).length;
-      vaultKnown = true;
-      if (vaultCount > 0) {
-        pVault.querySelector('.rw-file').innerHTML = 'Vault already on this phone (<b>' + vaultCount +
-          ' entr' + (vaultCount === 1 ? 'y' : 'ies') + '</b>) — leave this empty to KEEP it, or pick a file to add its entries as dated copies.';
+    /* v0.64: the folder can't be LISTED (fresh install) — probe the KNOWN
+       AFbak names of the last 14 days; readable ones become rows. */
+    function probePanel() {
+      function pad2p(n) { return String(n).padStart(2, '0'); }
+      var names = [];
+      for (var d = 0; d < 14; d++) {
+        var dt = new Date(Date.now() - d * 86400000);
+        names.push('AFbak-' + pad2p(dt.getDate()) + pad2p(dt.getMonth() + 1) + String(dt.getFullYear()).slice(2) + '.json');
       }
-      if (window.Native && Native.listBackups) {
-        Native.listBackups().then(function (list) {
-          if (!list || !list.length) return;
-          nativeList = list;
-          buildList(pFull, 'full', true, true);
-          buildList(pVault, 'vault', false, vaultCount === 0);
+      var found = [];
+      var chain = Promise.resolve();
+      names.forEach(function (nm) {
+        chain = chain.then(function () {
+          if (found.length >= 6) return null;
+          return Native.readBackupFile(nm).then(function (raw) {
+            if (raw) found.push({ name: nm, raw: raw });
+          });
         });
-      }
-    });
+      });
+      return chain.then(function () {
+        if (!found.length) return;
+        var box = pFull.querySelector('.rw-list');
+        box.innerHTML = '';
+        found.forEach(function (f) {
+          var row = UI.el('<button type="button" class="rw-row" data-name="' + UI.esc(f.name) + '">' +
+            '<span class="rw-nm">' + UI.esc(f.name) + '</span></button>');
+          row.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            accept(f.name, null, f.raw);
+          });
+          box.appendChild(row);
+        });
+        addPickerRow(box);
+        nativeList = []; /* rows own the taps now */
+        return accept(found[0].name, null, found[0].raw);
+      });
+    }
+    if (window.Native && Native.listBackups) {
+      Native.listBackups().then(function (list) {
+        if (list && list.length) {
+          nativeList = list;
+          buildList();
+          return;
+        }
+        return probePanel();
+      });
+    }
 
     UI.modal('Import to new phone', body, [
       { label: 'Cancel' },
       {
         label: 'Import', primary: true, onClick: function (close) {
-          /* v0.62 (#89): Full is required; the Vault file is OPTIONAL —
-             on an updated app the Vault is already on the phone. */
-          if (!picked.full) {
+          if (!picked) {
             UI.toast('Select a Full backup first (or Cancel)');
-            return;
-          }
-          if (!picked.vault && vaultKnown && vaultCount === 0) {
-            UI.toast('No Vault on this phone and no Vault file picked — Vault entries will NOT be restored');
-            /* one nudge, then a second tap proceeds */
-            vaultKnown = false;
             return;
           }
           close();
           UI.toast('Restoring full backup…');
-          DB.importAll(picked.full.json, { mode: 'merge' }).then(function (c) {
-            UI.toast('Data restored: +' + c.added + ' new, ' + c.updated + ' updated');
-            return picked.vault ? DB.importVault(picked.vault.json) : null;
-          }).then(function (v) {
+          DB.importAll(picked.json, { mode: 'merge' }).then(function (c) {
             App.applySettings();
-            UI.toast(v ? 'Vault restored: +' + v.added + ' entries ✓ — restore complete'
-              : 'Restore complete ✓ — the phone Vault was left as it is');
+            UI.toast('Restore complete ✓ — +' + c.added + ' new, ' + c.updated + ' updated' +
+              (picked.vaultN ? ' · Vault came back inside (' + picked.vaultN + ' entries)' : ''));
             if (onDone) onDone();
           }).catch(function (err) {
             UI.toast(String((err && err.message) || err));

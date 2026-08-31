@@ -570,76 +570,29 @@ Screens.discipline = (function () {
       if (withTime !== false) out += ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
       return out;
     }
-    function vaultBackupDone(r) {
-      var onPhone = r.where && r.where !== 'download';
-      var body = UI.el('<div><p>Backup <b>#' + VaultKeep.fmtSerial(r.serial) + '</b> written:</p>' +
-        '<p class="vk-file">' + UI.esc(r.filename) + '</p>' +
-        '<p class="sub">' + (onPhone
-          ? 'It is in <b>Documents › S26-Alef-Fit</b> on this phone.'
-          : 'It is in your <b>Downloads</b> folder.') +
-        '<br><br><b>USB copy (last step):</b> open <b>My Files</b> → ' +
-        (onPhone ? 'Documents › S26-Alef-Fit' : 'Downloads') +
-        ' → long-press the file → Copy → paste on your USB-C drive. ' +
-        'Then confirm below so the history shows USB ✓.</p></div>');
-      var btns = [
-        { label: 'Later' },
-        {
-          label: 'Copied to USB ✓', primary: true, onClick: function (close) {
-            VaultKeep.markUsb(r.serial).then(function () { UI.toast('USB copy recorded ✓'); close(); });
-          }
-        }
-      ];
-      /* system share sheet when this WebView offers file sharing */
-      if (navigator.canShare && r.bytes) {
-        try {
-          var shf = new File([r.bytes], r.filename, { type: 'application/zip' });
-          if (navigator.canShare({ files: [shf] })) {
-            btns.splice(1, 0, {
-              label: 'Share…', onClick: function () {
-                navigator.share({ files: [shf] }).catch(function () { /* user closed it */ });
-              }
-            });
-          }
-        } catch (e) { /* no file sharing here */ }
-      }
-      UI.modal('Vault backup done', body, btns);
-    }
     function vaultMenu() {
-      VaultKeep.info().then(function (vi) {
-        var dueTxt = 'no backup yet — do the first one below';
-        if (vi.backupAt) {
-          var days = Math.ceil((vi.dueAt - Date.now()) / 86400000);
-          dueTxt = days > 0 ? 'in ' + days + ' day' + (days === 1 ? '' : 's') : '⚠ DUE NOW';
-        }
+      /* v0.65 (Alef's ruling): ONE backup file — the Vault rides the
+         Full backup (AFbak). The dated .AFdd + serial ceremony is gone;
+         the silent rolling copy stays as the automatic safety net. */
+      Promise.all([VaultKeep.info(), DB.get('meta', 'fullBackupInfo')]).then(function (rr) {
+        var vi = rr[0];
+        var fb = rr[1] && rr[1].value;
+        var fbTxt = (fb && fb.ok)
+          ? '✓ ' + vkDate(fb.at, false) + (fb.at < (vi.changeAt || 0) ? ' · ⚠ older than the last change' : '')
+          : '⚠ none yet — Setting → Backup';
         var body = UI.el('<div>' +
           '<div class="card vk-info">' +
           '<div><span>Entries</span><b>' + vi.entries + '</b></div>' +
           '<div><span>Last change</span><b>' + vkDate(vi.changeAt) + '</b></div>' +
-          '<div><span>Retention copy</span><b>' + (vi.canMirror
+          '<div><span>Rolling copy</span><b>' + (vi.canMirror
             ? (vi.mirrorAt ? '✓ ' + vkDate(vi.mirrorAt) : '⚠ not written yet')
             : '— (runs on the APK)') + '</b></div>' +
-          '<div><span>Last backup</span><b>' + (vi.serial
-            ? '#' + VaultKeep.fmtSerial(vi.serial) + ' · ' + vkDate(vi.backupAt, false)
-            : '—') + '</b></div>' +
-          '<div><span>Next backup due</span><b>' + dueTxt + '</b></div>' +
+          '<div><span>In Full backup</span><b>' + fbTxt + '</b></div>' +
           '</div>' +
           '<div class="sub" style="margin-bottom:8px">🔒 The Vault lives on this S26 only — never in the cloud. ' +
-          'One tap below writes a disguised <b>.AFdd</b> backup (really a zip — rename to .zip to open anywhere). ' +
-          'The rolling copy <b>' + VaultKeep.CURRENT_NAME + '</b> in Documents › S26-Alef-Fit rewrites itself ~10 s after every change and survives app updates.</div></div>');
-        /* one-stop backup */
-        var bk = UI.el('<button class="btn btn-primary btn-block" style="margin-bottom:8px">' + UI.icon('download') + ' Back up now (.AFdd)</button>');
-        bk.addEventListener('click', function () {
-          if (!vi.entries) { UI.toast('Vault is empty — nothing to back up'); return; }
-          bk.disabled = true;
-          VaultKeep.backupNow().then(function (r) {
-            bk.disabled = false;
-            vaultBackupDone(r);
-          }).catch(function (e) {
-            bk.disabled = false;
-            UI.toast(String(e && e.message || e));
-          });
-        });
-        body.appendChild(bk);
+          'It backs up INSIDE the Full backup (Setting → Backup → <b>AFbak-DDMMYY.json</b>), and the rolling copy ' +
+          '<b>' + VaultKeep.CURRENT_NAME + '</b> in Documents › S26-Alef-Fit rewrites itself ~10 s after every change ' +
+          'and survives app updates — nothing extra to manage.</div></div>');
         /* import: .AFdd / .zip / legacy .json — full filename shown first */
         var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup (.AFdd / .zip / .json)</button>');
         var impFile = UI.el('<input type="file" accept=".AFdd,.zip,.json,application/json,application/zip,application/octet-stream" class="hidden">');
@@ -679,18 +632,6 @@ Screens.discipline = (function () {
         var expTxt = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('export') + ' Export Vault as text</button>');
         expTxt.addEventListener('click', exportVaultText);
         body.appendChild(expTxt);
-        /* backup history */
-        if (vi.log.length) {
-          body.appendChild(UI.el('<div class="td-subs-head" style="margin-top:10px">BACKUP HISTORY</div>'));
-          var hl = UI.el('<div class="list"></div>');
-          vi.log.slice(0, 12).forEach(function (en) {
-            hl.appendChild(UI.el('<div class="list-item"><span class="li-main">' +
-              '<span class="li-title">#' + VaultKeep.fmtSerial(en.serial) + (en.usb ? ' · USB ✓' : '') + '</span>' +
-              '<span class="li-sub vk-file">' + UI.esc(en.file) + '</span></span>' +
-              '<span class="li-sub">' + vkDate(en.at, false) + '</span></div>'));
-          });
-          body.appendChild(hl);
-        }
         UI.modal('Vault 🔒', body, [{ label: 'Close', primary: true }]);
       });
     }

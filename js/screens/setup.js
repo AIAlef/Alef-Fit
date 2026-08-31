@@ -25,7 +25,7 @@ Screens.setup = (function () {
       'Backup files live in <b>S26 › Documents › S26-Alef-Fit</b> (or your Downloads folder).</div>'));
 
     /* ---- v0.54: ONE-STOP restore — the whole ladder as one service ----
-       For a newly installed S26 APK: pick the two files (RestoreFlow) →
+       For a newly installed S26 APK: pick the one AFbak file (RestoreFlow, v0.65) →
        Google sign-in → Full Sync → claim S26 → land in Alef.do. A failed
        step leaves the button resumable AT that step; the manual cards
        below stay as the fallback. */

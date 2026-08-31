@@ -29,26 +29,15 @@
   var out = document.getElementById('out');
   var code = q.get('code');
   if (code) {
-    /* v0.61: ONE button — copy the code, then switch back to the app;
-       Alef.Fit reads the clipboard on return and fills the box itself. */
-    out.innerHTML = '<p>Tap the button, then switch back to the <b>Alef.Fit</b> app — the code fills in by itself:</p>' +
-      '<div id="code"></div><button id="cp">Copy code — return to Alef.Fit</button><p id="ok"></p>';
+    /* v0.64 (Alef's ruling): the button ONLY copies — the v0.63 intent
+       jump misfired on his phone, so switching back is manual again. */
+    out.innerHTML = '<p>Tap <b>Copy code</b>, then switch back to the <b>Alef.Fit</b> app yourself ' +
+      '(recent-apps or Back) and paste the code into the box — long-press it and Paste:</p>' +
+      '<div id="code"></div><button id="cp">Copy code</button><p id="ok"></p>';
     document.getElementById('code').textContent = code;
     document.getElementById('cp').addEventListener('click', function () {
       (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(function () {
-        document.getElementById('ok').innerHTML = 'Copied ✓ — jumping back to <b>Alef.Fit</b>… ' +
-          '(if nothing happens: recent-apps or Back. The code pastes itself into the box; ' +
-          'if not, long-press the box and Paste.)';
-        /* v0.63: actually RETURN to the app — an Android intent URL that
-           foregrounds the installed Alef.Fit APK (no custom scheme
-           needed; on other platforms it is a harmless no-op). */
-        setTimeout(function () {
-          try {
-            location.href = 'intent:#Intent;action=android.intent.action.MAIN;' +
-              'category=android.intent.category.LAUNCHER;package=fit.alef.app;end';
-          } catch (e) { /* stay on this page */ }
-          setTimeout(function () { try { window.close(); } catch (e2) { /* tab stays — fine */ } }, 600);
-        }, 350);
+        document.getElementById('ok').innerHTML = 'Copied ✓ — now return to <b>Alef.Fit</b> and paste it into the "Code from Google" box.';
       }, function () {
         document.getElementById('ok').textContent = 'Long-press the code to copy it, then return to Alef.Fit';
       });
