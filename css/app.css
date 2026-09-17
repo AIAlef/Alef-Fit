@@ -552,6 +552,20 @@ textarea.note-bg-lines, textarea.note-bg-graph { color: var(--text); }
 .lg-pp svg { width: 20px; height: 20px; }
 /* gym interval timer — flush to the bottom of the page */
 .gt-card { margin-top: auto; padding-top: 8px; }
+/* v0.67 KEYBOARD MODE (Alef 17-09-26): while a Wt/Rep box has focus the
+   soft keyboard is up — the page must not crush the record rows. The
+   timer hides (not needed mid-entry), the picture becomes a strip, and
+   the page height follows its (now short) content instead of the
+   viewport lock, so date + Wt/Rep stay fully visible above the keys. */
+.lg-page.kb-mode { height: auto; }
+.lg-page.kb-mode .lg-recs,
+.lg-page.kb-mode .lg-recs.recs-min { max-height: none; }
+.lg-page.kb-mode .lg-media { flex: 0 0 auto; }
+.lg-page.kb-mode .lg-media .lg-slide .crop-box { max-height: 140px; overflow: hidden; }
+.lg-page.kb-mode .lg-media .lg-slide img,
+.lg-page.kb-mode .lg-media .lg-slide video { max-height: 140px; object-fit: cover; object-position: top; }
+.lg-page.kb-mode .lg-media .media-dots { display: none; }
+.lg-page.kb-mode .gt-card { display: none; }
 .gt-roundbar {
   background: var(--surface2); border: 1px solid var(--line); border-bottom: 0;
   border-radius: var(--r-md) var(--r-md) 0 0; text-align: center;

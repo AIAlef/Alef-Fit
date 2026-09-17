@@ -2510,9 +2510,11 @@ Screens.discipline = (function () {
       t.subs.push({ id: DB.uid(), title: v, done: false });
       dirt();
       drawSubs();
-      try {
-        if (addRow.scrollIntoView) addRow.scrollIntoView({ block: 'nearest' });
-      } catch (e) { /* older WebViews */ }
+      /* v0.67 (Alef's ruling): after an add, the entry box sits at the
+         LOWEST visible row with the list above it — never at the top
+         with the list scrolled away. anchorLow also re-fires on the
+         focusin below, after the keyboard settles. */
+      try { UI.anchorLow(ai); } catch (e) { /* older WebViews */ }
       ai.focus();
     }
     ai.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commitAdd(); } });
@@ -3062,6 +3064,13 @@ Screens.discipline = (function () {
       var wrap = UI.el('<div></div>');
       pad.appendChild(wrap);
       var lists = cats.filter(function (c) { return c.id !== 'now'; });
+      /* v0.67 (Alef's ask): the TOMORROW time section joins Moment —
+         same virtual list as the main page (membership = startDate is
+         tomorrow), inserted right after TODAY. */
+      var tomISO = tomorrowISO();
+      var tAtM = -1;
+      lists.forEach(function (c, ci) { if (c.id === 'today' && tAtM < 0) tAtM = ci + 1; });
+      lists.splice(tAtM < 0 ? 1 : tAtM, 0, { id: 'tomorrow', name: 'TOMORROW', color: '#3fb8a8' });
       var nowCat = null;
       cats.forEach(function (c) { if (c.id === 'now') nowCat = c; });
       function show() {
@@ -3076,7 +3085,9 @@ Screens.discipline = (function () {
         var t = queue[i];
         wrap.appendChild(UI.el('<div class="sub td-moment-prog">' + (i + 1) + ' / ' + total + '</div>'));
         wrap.appendChild(UI.el('<div class="card td-moment"><h2>' + UI.esc(t.title) + '</h2>' +
-          (t.note ? '<div class="sub">' + UI.esc(t.note) + '</div>' : '') + '</div>'));
+          (t.note ? '<div class="sub">' + UI.esc(t.note) + '</div>' : '') +
+          (t.startDate ? '<div class="sub">⏭ starts ' + UI.esc(t.startDate + ' ' + (t.startTime || '08:00')) + '</div>' : '') +
+          '</div>'));
 
         /* section 1: Now toggle + Next */
         var s1 = UI.el('<div class="td-moment-btns"></div>');
@@ -3096,24 +3107,37 @@ Screens.discipline = (function () {
         wrap.appendChild(s1);
         wrap.appendChild(UI.el('<div class="td-moment-sep"></div>'));
 
-        /* section 2: home list — current shown, tap another to move */
+        /* section 2: home list — current shown, tap another to move.
+           v0.67: a task dated for tomorrow reads as TOMORROW (virtual),
+           exactly like the main page. */
+        var isTomM = !t.now && t.startDate === tomISO;
+        var curId = isTomM ? 'tomorrow' : (t.cat || 'today');
         var curList = null;
-        lists.forEach(function (c) { if (c.id === (t.cat || 'today')) curList = c; });
-        wrap.appendChild(UI.el('<div class="sub td-moment-cur">List: <b>' + UI.esc(curList ? curList.name : (t.cat || 'today').toUpperCase()) + '</b></div>'));
+        lists.forEach(function (c) { if (c.id === curId) curList = c; });
+        wrap.appendChild(UI.el('<div class="sub td-moment-cur">List: <b>' + UI.esc(curList ? curList.name : curId.toUpperCase()) + '</b></div>'));
         var s2 = UI.el('<div class="td-moment-btns"></div>');
         lists.forEach(function (c) {
-          var cur = c.id === (t.cat || 'today');
+          var cur = c.id === curId;
           var b = UI.el('<button class="btn" data-c="' + c.id + '"' + (cur ? ' disabled' : '') + '>' + UI.esc(c.name) + (cur ? ' ✓' : '') + '</button>');
           if (c.color && !cur) { b.style.background = c.color; b.style.borderColor = c.color; b.style.color = '#fff'; }
           if (!cur) {
             b.addEventListener('click', function () {
               /* v0.58 C10: route through the TOMORROW move rules — leaving
-                 the virtual list must clear the assigned date + time
-                 (before this, a TOMORROW task "moved" but stayed put) */
-              var planM = tdMovePlan(t, c.id, tomorrowISO());
-              Object.assign(t, planM.patch);
-              t.cat = c.id;
-              DB.put('todos', t).then(function () { i++; show(); });
+                 the virtual list must clear the assigned date + time.
+                 v0.67: moves INTO tomorrow honor the confirm for an
+                 already-dated task, and never store the virtual id. */
+              var planM = tdMovePlan(t, c.id, tomISO);
+              (planM.ask ? UI.confirm(planM.ask, 'Move to TOMORROW') : Promise.resolve(true)).then(function (okMv) {
+                if (!okMv) return;
+                Object.assign(t, planM.patch);
+                if (c.id !== 'tomorrow') t.cat = c.id;
+                DB.put('todos', t).then(function () {
+                  if (c.id === 'tomorrow' && planM.patch.startDate) {
+                    UI.toast('Moved to TOMORROW — starts ' + tomISO + ' 08:00');
+                  }
+                  i++; show();
+                });
+              });
             });
           }
           s2.appendChild(b);

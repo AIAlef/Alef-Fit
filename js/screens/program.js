@@ -730,6 +730,34 @@ Screens.program = (function () {
       buildEntry();
       drawPast();
 
+      /* v0.67 (Alef, 17-09-26): KEYBOARD MODE — typing a Wt/Rep number
+         used to let the soft keyboard crush the top of the page. While
+         any record input has focus: the interval timer hides (not needed
+         mid-entry), the picture shrinks to a strip (partial is fine),
+         and the record rows keep their room at the top. Restores itself
+         when focus leaves the table. */
+      var kbTimer = null;
+      recWrap.addEventListener('focusin', function (e) {
+        if (!e.target.matches || !e.target.matches('.rec-table input')) return;
+        clearTimeout(kbTimer);
+        pad.classList.add('kb-mode');
+        setTimeout(function () {
+          var sc = document.scrollingElement || document.documentElement;
+          sc.scrollTop = 0;
+          var scr = document.getElementById('screen');
+          if (scr) scr.scrollTop = 0;
+        }, 60);
+      });
+      recWrap.addEventListener('focusout', function () {
+        clearTimeout(kbTimer);
+        kbTimer = setTimeout(function () {
+          var a = document.activeElement;
+          if (a && a.matches && a.matches('.rec-table input') &&
+              recWrap.contains(a)) return;   /* hopped to the next box */
+          pad.classList.remove('kb-mode');
+        }, 250);
+      });
+
       /* v0.35.3: coming back to the still-open app on a new day → the
          entry panel resets to TODAY with a fresh ghost prefill */
       document.addEventListener('visibilitychange', function onVis() {

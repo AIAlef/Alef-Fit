@@ -484,6 +484,54 @@ var UI = (function () {
     document.body.appendChild(w);
   }
 
+  /* ---- v0.67 KEYBOARD ANCHOR (Alef 17-09-26) ----
+     Android scrolls a focused text box to the TOP of its scroller when
+     the soft keyboard opens — hiding everything above it (the subtask
+     list bug). Alef's priority: (1) the box being edited stays fully
+     visible, (2) the content above it keeps the room, so (3) the box
+     sits at the LOWEST visible row. anchorLow() scrolls the nearest
+     scrollable ancestor to that position; if everything already fits,
+     it never moves. Wired app-wide via one delegated focusin listener
+     (the Wt/Rep record table opts out — it has its own kb-mode). */
+  function anchorLow(inp) {
+    if (!inp || !inp.getBoundingClientRect || !document.body.contains(inp)) return;
+    var sc = inp.parentElement;
+    while (sc && sc !== document.body) {
+      var cs;
+      try { cs = getComputedStyle(sc); } catch (e) { return; }
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') &&
+          sc.scrollHeight > sc.clientHeight + 1) break;
+      sc = sc.parentElement;
+    }
+    var winMode = !sc || sc === document.body;
+    if (winMode) sc = document.scrollingElement || document.documentElement;
+    var er = inp.getBoundingClientRect();
+    var srTop, srBottom;
+    if (winMode) {
+      srTop = 0;
+      srBottom = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+    } else {
+      var r = sc.getBoundingClientRect();
+      srTop = r.top; srBottom = r.bottom;
+    }
+    var viewH = srBottom - srTop;
+    if (viewH <= 0) return;
+    var delta = (er.height > viewH * 0.6)
+      ? er.top - srTop - 8            /* tall box (big note): pin its TOP */
+      : er.bottom - (srBottom - 12);  /* normal box: sit at the bottom row */
+    var next = Math.max(0, sc.scrollTop + delta);
+    if (Math.abs(next - sc.scrollTop) > 1) sc.scrollTop = next;
+  }
+  document.addEventListener('focusin', function (e) {
+    var t = e.target;
+    if (!t || !t.matches) return;
+    if (!t.matches('input[type="text"], input[type="search"], input:not([type]), textarea')) return;
+    if (t.closest('.rec-table')) return;  /* record page has kb-mode */
+    [140, 450].forEach(function (ms) {    /* after the keyboard settles */
+      setTimeout(function () { if (document.activeElement === t) anchorLow(t); }, ms);
+    });
+  });
+
   return {
     esc: esc, el: el, icon: icon, icons: I,
     fmtDate: fmtDate, fmtDateTime: fmtDateTime,
@@ -492,6 +540,6 @@ var UI = (function () {
     fileToDataUrl: fileToDataUrl, download: download, copyText: copyText, saveImage: saveImage,
     saveDataUrl: saveDataUrl, openDataUrl: openDataUrl, lineChart: lineChart,
     recTable: recTable, pickExercise: pickExercise, lightbox: lightbox, recPastRow: recPastRow,
-    dragScroll: dragScroll
+    dragScroll: dragScroll, anchorLow: anchorLow
   };
 })();
