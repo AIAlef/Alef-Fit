@@ -126,10 +126,9 @@ Screens.setting = (function () {
       '<p><b>ONE file</b> (v0.65) — <b>AFbak-DDMMYY.json</b> holds EVERYTHING: data, media, settings and the <b>Vault</b>. One file per day (a re-run overwrites). Weekly tap + occasional USB copy = fully covered.</p>' +
       '<p><b>Vault safety net</b> — automatic: <b>AFvault-current.AFdd</b> rewrites itself ~10 s after every Vault change and survives reinstalls. Nothing to manage; old AFvault files still import via Alef.do → Vault 🔒 → Import.</p>' +
       '<p><b>Where:</b> ' + whereTxt + '</p>' +
-      '<p><b>Import</b> — restores ANY backup file, old long names included (the type is detected). <b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.</p>' +
-      '<p><b>New phone</b> — "Import to new phone" here (one AFbak file), or the Setup wizard\'s ⚡ one-stop restore.</p>' +
-      '<p><b>Drive mirror</b> — uploads a VAULT-FREE full backup to My Drive › Alef.Fit › Archives (keeps the newest 3). The line turns RED past your reminder interval.</p>' +
-      '<p><b>Advanced</b> — rare small exports: connection settings (AFinfo), tasks only (AFtodo), PC ↔ phone transfer (AFtrans).</p>';
+      '<p><b>Restore</b> — <b>Full Import</b> auto-picks the newest AFbak; Manual steps fold open only when needed. <b>Merge</b> = combine, newest wins, never loses data.</p>' +
+      '<p><b>GD mirror</b> — uploads a VAULT-FREE full backup to My Drive › Alef.Fit › Archives (keeps the newest 3). The date line turns ORANGE past 7 days — same rule as the Full Backup line.</p>' +
+      '<p><b>Advanced</b> — rare small exports/imports: connection settings (AFinfo), tasks only (AFtodo), PC ↔ phone transfer (AFtrans), and the any-type file import (old backup names included).</p>';
     var bkHead = UI.el('<div class="section-title">Backup <button type="button" class="btn-icon sm bk-help" aria-label="How backup works">' + UI.icon('help') + '</button></div>');
     bkHead.querySelector('.bk-help').addEventListener('click', function () {
       UI.modal('Backup — how it works', UI.el('<div class="bk-help-body">' + BK_HELP + '</div>'), [{ label: 'Close', primary: true }]);
@@ -164,7 +163,7 @@ Screens.setting = (function () {
     });
     /* Full backup — everything incl. media. v0.49: the LOCAL full backup
        carries the Vault too (cloud sync files still never do). */
-    var bk4 = bkBtn('Full backup (all data + Vault)', true);
+    var bk4 = bkBtn('Full Backup (Data + Vault)', true);  /* v0.71 wording (Alef) */
     /* v0.53: save details live UNDER the button, not in popups/toasts —
        persistent "current backup" status + live progress while writing */
     var bk4Status = UI.el('<div class="sub bk4-status" style="margin:2px 0 8px"></div>');
@@ -188,17 +187,37 @@ Screens.setting = (function () {
       return '✓ Current backup: ' + new Date(info.at).toLocaleString('en-GB') + ' · ' + info.mb + ' MB\n' +
         loc + ' — ' + file + ' (Vault inside)';
     }
-    /* v0.57 A2: staleness nudge — quiet while ≤ 7 days, red beyond */
+    /* v0.71 (Alef): CHECK for the previous backup — this device's own
+       record first, else the newest AFbak on disk (post-reinstall truth) —
+       show its date, ORANGE past 7 days (red only when none exists). */
     var bk4Age = UI.el('<div class="sub bk4-age" style="margin:0 0 8px"></div>');
-    function paintAge(info) {
-      if (!info || !info.ok) {
-        bk4Age.textContent = 'No full backup on this device yet — make one.';
-        bk4Age.classList.add('bk-warn');
+    function newestBakOnDisk() {
+      if (!(window.Native && Native.listBackups)) return Promise.resolve(null);
+      return Native.listBackups().then(function (list) {
+        var best = null;
+        (list || []).forEach(function (f) {
+          if (/^AFbak-.*\.json$/i.test(f.name) && !/\.part$/i.test(f.name) &&
+              (!best || (f.mtime || 0) > (best.mtime || 0))) best = f;
+        });
+        return best;
+      }).catch(function () { return null; });
+    }
+    function paintPrev(el, at, what) {
+      el.classList.remove('bk-warn');
+      el.classList.remove('bk-stale');
+      if (!at) {
+        el.textContent = 'No previous ' + what + ' found — make one.';
+        el.classList.add('bk-warn');
         return;
       }
-      var days = Math.floor((Date.now() - info.at) / 86400000);
-      bk4Age.textContent = 'Full backup is ' + (days <= 0 ? 'from today' : days + ' day' + (days === 1 ? '' : 's') + ' old');
-      bk4Age.classList.toggle('bk-warn', days > 7);
+      var days = Math.floor((Date.now() - at) / 86400000);
+      el.textContent = 'Previous ' + what + ': ' + new Date(at).toLocaleString('en-GB') +
+        (days <= 0 ? ' (today)' : ' (' + days + ' day' + (days === 1 ? '' : 's') + ' ago)');
+      if (days > 7) el.classList.add('bk-stale');
+    }
+    function paintAge(info) {
+      if (info && info.ok) { paintPrev(bk4Age, info.at, 'backup'); return; }
+      newestBakOnDisk().then(function (f) { paintPrev(bk4Age, f && f.mtime, 'backup'); });
     }
     DB.get('meta', 'fullBackupInfo').then(function (r) {
       bk4Status.textContent = fmtBk4(r && r.value);
@@ -257,7 +276,10 @@ Screens.setting = (function () {
       });
     });
     /* (the where-to-find-it text lives in the ? help sheet since v0.58) */
-    var impBtn = UI.el('<button class="btn btn-block">' + UI.icon('upload') + ' Import backup file</button>');
+    /* v0.71 (Alef): no old-style backups in daily use — this any-type
+       import retires into the Advanced fold; AFbak restores go through
+       Full Import (RestoreFlow) only. */
+    var impBtn = UI.el('<button class="btn btn-block" style="margin-bottom:8px">' + UI.icon('upload') + ' Import file (AFtrans / AFinfo / old backups)</button>');
     var impFile = UI.el('<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">');
     impBtn.addEventListener('click', function () { impFile.click(); });
     impFile.addEventListener('change', function (e) {
@@ -342,19 +364,21 @@ Screens.setting = (function () {
       fr.readAsArrayBuffer(f);
       e.target.value = '';
     });
-    bk.appendChild(impBtn);
-    bk.appendChild(impFile);
+    /* v0.71: impBtn/impFile append into the Advanced fold below */
     /* v0.53: real full restore for a NEW phone — both files in one go */
-    var impBothBtn = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('upload') + ' Import to new phone (one AFbak file)</button>');
+    var impBothBtn = UI.el('<button class="btn btn-block" style="margin-top:8px">' + UI.icon('upload') + ' Full Import (one-stop RestoreFlow)</button>');  /* v0.71 wording (Alef) */
     impBothBtn.addEventListener('click', function () {
       RestoreFlow.open(function () { App.route(); });
     });
     bk.appendChild(impBothBtn);
     var undoBtn = UI.el('<button class="btn btn-block" style="margin-top:8px;display:none">Undo last sync/merge</button>');
+    /* v0.71 (Alef): the date-time sits on its own row below the button */
+    var undoSub = UI.el('<div class="sub" style="display:none;margin:2px 0 0"></div>');
     DB.undoInfo().then(function (u) {
       if (u) {
         undoBtn.style.display = '';
-        undoBtn.textContent = 'Undo last sync/merge (' + new Date(u.at).toLocaleString('en-GB') + ')';
+        undoSub.style.display = '';
+        undoSub.textContent = new Date(u.at).toLocaleString('en-GB');
       }
     });
     undoBtn.addEventListener('click', function () {
@@ -368,30 +392,17 @@ Screens.setting = (function () {
       });
     });
     bk.appendChild(undoBtn);
+    bk.appendChild(undoSub);
 
-    /* ---- v0.57 A3: elective Drive mirror (details in the ? help) ---- */
-    var mirBtn = UI.el('<button class="btn btn-block" style="margin:12px 0 6px">' + UI.icon('upload') + ' Mirror backup to Drive</button>');
+    /* ---- v0.57 A3 elective Drive mirror — v0.71 (Alef): renamed GD
+       mirror, previous-upload date shown, ORANGE past 7 days (same rule
+       as Full Backup); the custom reminder-interval input retired (the
+       mirrorIntervalDays setting stays for the media-vault mirror). ---- */
+    var mirBtn = UI.el('<button class="btn btn-block" style="margin:12px 0 6px">' + UI.icon('upload') + ' GD mirror backup (Data only)</button>');
     var mirStat = UI.el('<div class="sub bk-mir-stat"></div>');
-    var mirRow = UI.el('<div class="sub" style="margin:4px 0 0">Remind after <input type="number" id="bk-mir-int" min="1" max="365" style="width:58px"> days without a mirror</div>');
-    mirRow.querySelector('#bk-mir-int').value = s.mirrorIntervalDays || 30;
-    mirRow.querySelector('#bk-mir-int').addEventListener('change', function (e) {
-      var v = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 30));
-      e.target.value = v;
-      DB.saveSettings({ mirrorIntervalDays: v }).then(paintMir);
-    });
     function paintMir() {
       DB.get('meta', 'archiveMirrorAt').then(function (r) {
-        var at = r && r.value;
-        var iv = (DB.getSettings() || {}).mirrorIntervalDays || 30;
-        if (!at) {
-          mirStat.textContent = 'No Drive mirror yet.';
-          mirStat.classList.add('bk-warn');
-          return;
-        }
-        var days = Math.floor((Date.now() - at) / 86400000);
-        mirStat.textContent = 'Last mirror upload: ' + new Date(at).toLocaleString('en-GB') +
-          ' (' + days + ' day' + (days === 1 ? '' : 's') + ' ago)';
-        mirStat.classList.toggle('bk-warn', days > iv);
+        paintPrev(mirStat, r && r.value, 'mirror');
       });
     }
     paintMir();
@@ -400,6 +411,7 @@ Screens.setting = (function () {
       if (!Sync.hasClientId || !Sync.hasClientId()) { UI.toast('Connect Google first — Setting → Share with Claude → Connect'); return; }
       mirBtn.disabled = true;
       mirStat.classList.remove('bk-warn');
+      mirStat.classList.remove('bk-stale');
       mirStat.textContent = 'Building the mirror file…';
       DB.exportAll({ media: 'all' }).then(function (data) { /* vault EXCLUDED — never rides the cloud */
         var name = 'AFbak-' + shortDate() + '.json';
@@ -416,7 +428,6 @@ Screens.setting = (function () {
     });
     bk.appendChild(mirBtn);
     bk.appendChild(mirStat);
-    bk.appendChild(mirRow);
 
     /* ---- Advanced (rare) exports fold away — v0.57 ruling 8 ---- */
     var advHead = UI.el('<button type="button" class="btn btn-block" style="margin-top:12px">Advanced backups ▸</button>');
@@ -429,6 +440,8 @@ Screens.setting = (function () {
     advBox.appendChild(bk1);
     advBox.appendChild(bk3);
     advBox.appendChild(expSyncBtn);
+    advBox.appendChild(impBtn);       /* v0.71: any-type import lives here */
+    advBox.appendChild(impFile);
     bk.appendChild(advBox);
     var usage = UI.el('<div class="sub" style="margin-top:10px">Storage: …</div>');
     DB.storageEstimate().then(function (est) {
@@ -724,9 +737,9 @@ Screens.setting = (function () {
       /* v0.53: rewritten per Alef — concise, one line per real situation */
       '<table class="info-table"><tr><th>Situation</th><th>What to do</th></tr>' +
       '<tr><td><b>NEW S26</b><br>(fresh install)</td><td>Setup wizard → <b>⚡ One-stop restore</b>: the newest AFbak-….json is picked for you (Vault inside) — sign-in, Full Sync and the S26 claim chain by themselves.</td></tr>' +
-      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>Full backup</b> — ONE file, AFbak-….json, Vault included; the lines under the button show status + age. Occasionally copy it to USB.</td></tr>' +
+      '<tr><td><b>Mature S26</b><br>(routine backup)</td><td>Weekly (or after big changes): tap <b>Full Backup (Data + Vault)</b> — ONE file, AFbak-….json, Vault included; the lines under the button show status + the previous-backup date (orange past 7 days). Occasionally copy it to USB.</td></tr>' +
       '<tr><td><b>Secure the Vault</b></td><td>Automatic: it rides every Full backup, and the rolling AFvault-current.AFdd rewrites itself ~10 s after every change. The Vault NEVER rides the cloud.</td></tr>' +
-      '<tr><td><b>Long retention</b></td><td><b>Mirror backup to Drive</b> — a vault-free AFbak copy into My Drive › Alef.Fit › Archives; the line turns RED past your interval (default 30 d).</td></tr>' +
+      '<tr><td><b>Long retention</b></td><td><b>GD mirror backup (Data only)</b> — a vault-free AFbak copy into My Drive › Alef.Fit › Archives; the date line turns ORANGE past 7 days.</td></tr>' +
       '<tr><td><b>Device transfer</b><br>(PC ↔ phone)</td><td>Advanced → Export <b>sync file</b> (AFtrans, small) → Import → <b>Merge</b> on the other device. Daily changes travel by <b>Sync now</b> instead.</td></tr></table>' +
       '<div class="sub" style="margin:6px 0"><b>Merge</b> = combine, newest wins, never loses data. <b>Replace all</b> = wipe this device first — recovery only.<br>' +
       'Files live in <b>Documents › S26-Alef-Fit</b> (phone) or Downloads (browser).</div>');
@@ -963,18 +976,39 @@ window.RestoreFlow = (function () {
 
   function open(onDone) {
     var picked = null; /* { json, name, vaultN } */
-    var body = UI.el('<div><p class="sub">Restore in ONE go — the newest <b>AFbak</b> file is pre-selected ' +
-      '(tap another row to change), then Import. One file holds EVERYTHING: data, media, settings and the Vault. ' +
-      'The files live in <b>Documents › S26-Alef-Fit</b> (or Downloads / your USB copy).</p></div>');
+    /* v0.71 (Alef): the happy path is TWO taps (open → Import) — every
+       manual step hides behind the "Manual steps" fold, which opens by
+       itself only when the automatic pick cannot work. */
+    var body = UI.el('<div><p class="sub">The newest <b>AFbak</b> pre-selects itself — tap <b>Import</b>. ' +
+      'One file restores everything: data, media, settings, Vault.</p></div>');
     var pFull = UI.el('<div class="rw-panel">' +
       '<div class="rw-head">Full backup (AFbak-DDMMYY.json)</div>' +
-      '<div class="rw-file sub">Tap to choose… (older alef-fit-4-full-backup files work too)</div>' +
+      '<div class="rw-file sub">Checking…</div>' +
       '<div class="rw-list"></div>' +
+      '<button type="button" class="rw-man-h sub">Manual steps ▸</button>' +
+      '<div class="rw-man hidden"></div>' +
       '<input type="file" accept=".json,.AFdd,.zip,application/json,application/zip,application/octet-stream" class="hidden">' +
       '</div>');
     body.appendChild(pFull);
-    body.appendChild(UI.el('<p class="sub" style="margin-top:6px">A fresh install starts empty — your data is NOT lost. ' +
-      'Old AFvault-….AFdd files (the retired second file) import any time via Alef.do → Vault 🔒 → Import backup.</p>'));
+    var man = pFull.querySelector('.rw-man');
+    var manH = pFull.querySelector('.rw-man-h');
+    manH.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      man.classList.toggle('hidden');
+      manH.textContent = man.classList.contains('hidden') ? 'Manual steps ▸' : 'Manual steps ▾';
+    });
+    function openMan() {
+      man.classList.remove('hidden');
+      manH.textContent = 'Manual steps ▾';
+    }
+    man.appendChild(UI.el('<div class="sub">1) Tap "📂 Select AFbak file…" · 2) open ' +
+      '<b>Documents › S26-Alef-Fit</b> (or Downloads / your USB copy) · 3) pick the newest ' +
+      '<b>AFbak-DDMMYY.json</b> (older alef-fit-4-full-backup files work too).</div>'));
+    /* v0.71 (Alef): the pick-a-file button must be UNMISSABLE */
+    var moreBtn = UI.el('<button type="button" class="rw-row rw-more">📂 Select AFbak file…</button>');
+    man.appendChild(moreBtn);
+    man.appendChild(UI.el('<div class="sub">A fresh install starts empty — your data is NOT lost. ' +
+      'Old AFvault-….AFdd files (the retired second file) import any time via Alef.do → Vault 🔒 → Import backup.</div>'));
     var nativeList = null; /* set when the app can read the folder itself */
 
     function accept(srcName, whenMs, raw) {
@@ -1014,10 +1048,11 @@ window.RestoreFlow = (function () {
       });
     }
 
-    var inp = pFull.querySelector('input');
+    var inp = pFull.querySelector('input[type=file]');
+    moreBtn.addEventListener('click', function (ev) { ev.stopPropagation(); inp.click(); });
     pFull.addEventListener('click', function (e) {
       if (nativeList) return; /* the file rows do the picking */
-      if (e.target !== inp) inp.click();
+      if (e.target !== inp && !man.contains(e.target) && e.target !== manH) inp.click();
     });
     inp.addEventListener('change', function (e) {
       var f = e.target.files[0];
@@ -1028,11 +1063,6 @@ window.RestoreFlow = (function () {
       e.target.value = '';
     });
 
-    function addPickerRow(box) {
-      var more = UI.el('<button type="button" class="rw-row rw-more">📂 Choose another file…</button>');
-      more.addEventListener('click', function (ev) { ev.stopPropagation(); inp.click(); });
-      box.appendChild(more);
-    }
     /* v0.61: newest-first rows + auto-pick of the newest that VALIDATES */
     function buildList() {
       var cands = nativeList.filter(function (f) { return nameMatches(f.name); });
@@ -1051,7 +1081,6 @@ window.RestoreFlow = (function () {
         row.addEventListener('click', function (ev) { ev.stopPropagation(); pickRow(f); });
         box.appendChild(row);
       });
-      addPickerRow(box);
       var i = 0;
       function tryNext() {
         if (i >= Math.min(3, cands.length)) {
@@ -1060,7 +1089,8 @@ window.RestoreFlow = (function () {
           if (!picked) {
             pFull.querySelector('.rw-file').innerHTML =
               '⚠ This install can\'t read the files here directly yet (normal after a reinstall) — ' +
-              'your backups ARE in the folder: tap <b>📂 Choose another file…</b> and pick the newest one there.';
+              'your backups ARE in the folder: tap <b>📂 Select AFbak file…</b> and pick the newest one there.';
+            openMan();   /* v0.71: the manual steps unfold ONLY now */
           }
           return null;
         }
@@ -1070,6 +1100,8 @@ window.RestoreFlow = (function () {
       if (cands.length) {
         pFull.querySelector('.rw-file').textContent = 'Checking newest file…';
         tryNext();
+      } else {
+        guideManual();   /* v0.71: folder lists but holds no AFbak */
       }
     }
     /* v0.64: the folder can't be LISTED (fresh install) — probe the KNOWN
@@ -1104,10 +1136,15 @@ window.RestoreFlow = (function () {
           });
           box.appendChild(row);
         });
-        addPickerRow(box);
         nativeList = []; /* rows own the taps now */
         return accept(found[0].name, null, found[0].raw);
       });
+    }
+    function guideManual() {
+      if (picked) return;
+      pFull.querySelector('.rw-file').innerHTML =
+        'Tap <b>📂 Select AFbak file…</b> below and pick the newest AFbak.';
+      openMan();
     }
     if (window.Native && Native.listBackups) {
       Native.listBackups().then(function (list) {
@@ -1116,8 +1153,10 @@ window.RestoreFlow = (function () {
           buildList();
           return;
         }
-        return probePanel();
+        return probePanel().then(guideManual);
       });
+    } else {
+      guideManual();   /* browser/PC: only the system picker exists */
     }
 
     UI.modal('Import to new phone', body, [

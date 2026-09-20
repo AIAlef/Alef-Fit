@@ -932,7 +932,18 @@ html[data-msize="l"] .media-stage .crop-box { --stage-max: 440px; }
 .rw-row .rw-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rw-row .rw-dt { flex: none; }
 .rw-row.on { border-color: #4fb06d; box-shadow: inset 0 0 0 1px #4fb06d; }
-.rw-row.rw-more { justify-content: center; border-style: dashed; }
+/* v0.71 (Alef): the AFbak picker button must be clearly visible */
+.rw-row.rw-more {
+  justify-content: center; border: 1.6px solid var(--accent);
+  color: var(--accent); background: var(--accent-soft);
+  font-size: .95rem; font-weight: 700; padding: 12px 10px;
+  border-radius: var(--r-md);
+}
+/* v0.71: the manual steps fold inside the restore panel */
+.rw-man-h { display: block; width: 100%; margin-top: 8px; padding: 4px 0;
+  background: none; border: 0; text-align: left; cursor: pointer; }
+.rw-man { border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
+.rw-man .sub { margin: 4px 0; }
 
 /* (v0.53 Schedules styles removed in v0.55 — section dropped) */
 .td-b-diamond { background: linear-gradient(135deg, #eaf5ff 0%, #a8d4ff 30%, #e6f0ff 50%, #7fb8f0 72%, #dcefff 100%); overflow: hidden; }
@@ -1418,4 +1429,5 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 
 /* ==== v0.60: mirror + (fix) the red warn color that v0.57 classes used ==== */
 .bk-warn { color: #e05d5d !important; }
+.bk-stale { color: #e5962d !important; }  /* v0.71: previous backup > 7 days */
 .mv-mirror .mv-mir-btn { margin-left: 6px; padding: 1px 10px; }
