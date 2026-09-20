@@ -249,6 +249,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .exp-prev { width: 100%; min-height: 200px; max-height: 45vh; font-family: ui-monospace, Menlo, monospace;
   font-size: .78rem; white-space: pre; overflow: auto; border: 1px solid var(--line);
   border-radius: var(--r-md); background: var(--surface2); color: var(--text); padding: 10px; }
+/* v0.69: template toggle sits right of the "Export task" title */
+.exp-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.exp-mode { display: flex; align-items: center; gap: 5px; font-size: .72rem;
+  font-weight: 400; color: var(--text2); white-space: nowrap; }
+.exp-mode input { accent-color: var(--accent); }
 .modal-btns { display: flex; gap: 10px; margin-top: var(--sp-4); }
 .modal-btns .btn { flex: 1; }
 @media (min-width: 600px) { .modal-wrap { align-items: center; } .modal { border-radius: 22px; } }
@@ -988,6 +993,19 @@ html[data-msize="l"] .media-stage .crop-box { --stage-max: 440px; }
 .td-del:active { background: var(--danger); color: #fff; }
 .td-del-sm { width: 24px; height: 24px; font-size: .75rem; }
 
+/* v0.70: green → on a subtask row (same slot as the finished-✕) flags it
+   to surface in TODAY as a dummy entry; lit while the flag is on */
+.td-sub-today {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  margin-left: auto; border: 1.6px solid #22a06b; color: #22a06b;
+  background: transparent; font-size: .8rem; font-weight: 800;
+  cursor: pointer; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.td-sub-today.on { background: #22a06b; color: #fff; }
+/* the dummy row's small "↳ parent" tag */
+.td-dummark { font-size: .68rem; color: var(--text2); font-weight: 400; white-space: nowrap; }
+
 /* v0.41: Completed Tasks archive (v0.43: folding months + month review) */
 .tdc-month { margin-top: 0; letter-spacing: .08em; }
 .tdc-row .li-sub { font-size: .68rem; }
@@ -1250,6 +1268,13 @@ html[data-tdcompact] .td-zone .todo-item { padding: 3px 14px; min-height: 32px; 
 .td-nowat, .td-startd {
   border: 1px solid var(--line); background: var(--surface2); color: var(--text2);
   border-radius: 999px; padding: 2px 8px; font: inherit; font-size: .72rem; width: auto;
+}
+
+/* v0.68: optional Habit renew time — sits at the end of the priority row */
+.td-habit-time {
+  border: 1px solid var(--line); background: var(--surface2); color: var(--text2);
+  border-radius: 999px; padding: 2px 8px; font: inherit; font-size: .72rem;
+  width: auto; margin-left: auto; align-self: center;
 }
 
 /* ---- v0.52: Vault safekeeping cockpit ---- */

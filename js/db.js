@@ -1215,18 +1215,21 @@ var DB = (function () {
       var changed = [];
       rows.forEach(function (t) {
         if (t.done || t.cat === 'vault') return;
-        /* v0.50: scheduled start (date + time, default 08:00). Date reached
-           → the task moves to TODAY; date+time reached → it becomes NOW
-           (one-shot: the schedule then clears). */
+        /* v0.50: scheduled start. Date reached → the task moves to TODAY;
+           date+time reached → it becomes NOW (one-shot: the schedule then
+           clears). v0.68 (Alef): a date WITHOUT a time only enters TODAY —
+           it stays untimed and must never auto-flip to Now. */
         if (t.startDate && t.startDate <= today) {
-          var tm = t.startTime || '08:00';
           /* v0.57 C1: only WRITE when something actually changed — the old
              unconditional push re-stamped a waiting task every 20 s tick,
              starving the auto-sync debounce and letting this device
              overwrite real edits from the other seat in the merge. */
           var moved = false;
           if (t.cat !== 'today') { t.cat = 'today'; moved = true; }
-          if (t.startDate < today || tm <= hm) {
+          if (!t.startTime) {
+            t.startDate = null;       /* consumed: this writes exactly once */
+            moved = true;
+          } else if (t.startDate < today || t.startTime <= hm) {
             t.now = true;
             t.nowAt = null;
             t.startDate = null;
@@ -1288,7 +1291,10 @@ var DB = (function () {
       prio: 'low', tags: (t.tags || []).slice(),
       subs: (t.subs || []).map(function (s) { return { id: uid(), title: s.title, done: false }; }),
       note: t.note || '', done: false, dueDate: null, time: null, allDay: false,
-      createdAt: Date.now(), startDate: iso, startTime: '08:00',
+      /* v0.68 (Alef): renew time is the user's optional choice (habitTime).
+         Unset → the copy enters TODAY untimed and never auto-flips to Now. */
+      createdAt: Date.now(), startDate: iso, startTime: t.habitTime || null,
+      habitTime: t.habitTime || null,
       habitCount: (t.habitCount || 0) + 1, habitOf: t.habitOf || t.id
     };
     return put('todos', copy).then(function () { return copy; });

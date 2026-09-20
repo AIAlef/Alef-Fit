@@ -132,18 +132,19 @@ Screens.discipline = (function () {
       String(d.getDate()).padStart(2, '0');
   }
   /* The move rules as a pure plan — dropTask applies it, the suite tests
-     it. IN: assign tomorrow 08:00 (a task already scheduled for ANOTHER
-     day asks first; a Today/undated task moves silently). OUT: leaving
-     TOMORROW for any real list clears the assigned date + time. */
+     it. IN: assign tomorrow, UNTIMED (v0.68: the user chose no time, so it
+     enters TODAY at midnight without auto-Now; a task already scheduled
+     for ANOTHER day asks first; a Today/undated task moves silently).
+     OUT: leaving TOMORROW for any real list clears the assigned date + time. */
   function tdMovePlan(t, cat, tomISO) {
     if (cat === 'tomorrow') {
       if (t.startDate === tomISO) return { ask: null, patch: {} }; /* reorder within the list */
       return {
         ask: t.startDate
-          ? 'This task is scheduled for ' + t.startDate + ' ' + (t.startTime || '08:00') +
-            '. Move it to TOMORROW (' + tomISO + ' 08:00) instead?'
+          ? 'This task is scheduled for ' + t.startDate + (t.startTime ? ' ' + t.startTime : '') +
+            '. Move it to TOMORROW (' + tomISO + ') instead?'
           : null,
-        patch: { cat: 'later', now: false, nowAt: null, startDate: tomISO, startTime: '08:00' }
+        patch: { cat: 'later', now: false, nowAt: null, startDate: tomISO, startTime: null }
       };
     }
     if (t.startDate === tomISO) return { ask: null, patch: { startDate: null, startTime: null } };
@@ -158,7 +159,7 @@ Screens.discipline = (function () {
     var extra = [];
     if (t.prio && t.prio !== 'none') extra.push('[' + prioName(t.prio) + ']');
     if (t.now || t.cat === 'now') extra.push('[Now]');
-    else if (t.startDate) extra.push('[@' + t.startDate + ' ' + (t.startTime || '08:00') + ']');
+    else if (t.startDate) extra.push('[@' + t.startDate + (t.startTime ? ' ' + t.startTime : '') + ']');
     else if (t.nowAt) extra.push('[@' + t.nowAt + ']');
     if (t.locked) extra.push('[Protected]');
     var tags = (t.tags || []).map(function (id) { return (tagName || {})[id]; }).filter(Boolean);
@@ -172,6 +173,22 @@ Screens.discipline = (function () {
       String(t.note).trim().split('\n').forEach(function (ln, i) {
         lines.push('    ' + (i === 0 ? 'note: ' : '      ') + ln);
       });
+    }
+    return lines.join('\n');
+  }
+
+  /* v0.69 (Alef's template): TEXT ONLY — no checkboxes, markers or tags.
+     Done subtasks get "(done)" before the title; the note follows after
+     a blank line under its own "note:" heading, lines unindented. */
+  function fmtTaskTextPlain(t) {
+    var lines = ['- ' + (t.title || '')];
+    (t.subs || []).forEach(function (s) {
+      lines.push('    - ' + (s.done ? '(done) ' : '') + (s.title || ''));
+    });
+    if (t.note && String(t.note).trim()) {
+      lines.push('');
+      lines.push('note:');
+      String(t.note).trim().split('\n').forEach(function (ln) { lines.push(ln); });
     }
     return lines.join('\n');
   }
@@ -284,21 +301,28 @@ Screens.discipline = (function () {
     });
   }
 
-  /* task-sheet button: this one task (current, unsaved edits included) */
+  /* task-sheet button: this one task (current, unsaved edits included).
+     v0.69 (Alef): a toggle right of the "Export task" title picks the
+     template — ON = Text only (the default), OFF = Detailed list (the
+     full to-do formatting with checkboxes and markers). */
   function exportOneTask(t, cats) {
     tagNameMap().then(function (tagName) {
       var cat = null;
       (cats || []).forEach(function (c) { if (c.id === (t.cat || 'today')) cat = c; });
-      var text = 'Alef.do task — ' + DB.todayISO() + '\n' +
-        (cat ? 'List: ' + cat.name + '\n' : '') + '\n' +
-        fmtTaskText(t, tagName) + '\n';
+      var textOnly = true;                      /* Alef: Text only default */
+      function compose() {
+        return 'Alef.do task — ' + DB.todayISO() + '\n' +
+          (cat ? 'List: ' + cat.name + '\n' : '') + '\n' +
+          (textOnly ? fmtTaskTextPlain(t) : fmtTaskText(t, tagName)) + '\n';
+      }
       var body = UI.el('<div><textarea class="exp-prev" readonly></textarea></div>');
-      body.querySelector('.exp-prev').value = text;
-      UI.modal('Export task', body, [
+      var prev = body.querySelector('.exp-prev');
+      prev.value = compose();
+      var m = UI.modal('Export task', body, [
         { label: 'Close' },
         {
           label: 'Copy', onClick: function (close) {
-            UI.copyText(text).then(function (ok) {
+            UI.copyText(compose()).then(function (ok) {
               UI.toast(ok ? 'Copied to clipboard ✓' : 'Copy failed — use Save .txt');
               if (ok) close();
             });
@@ -307,12 +331,23 @@ Screens.discipline = (function () {
         {
           label: 'Save .txt', primary: true, onClick: function (close) {
             var fn = 'alef-do-task-' + slugName(t.title) + '-' + DB.todayISO() + '.txt';
-            UI.download(fn, text, 'text/plain');
+            UI.download(fn, compose(), 'text/plain');
             if (!(window.Native && Native.isNative && Native.isNative())) UI.toast('Exported ' + fn);
             close();
           }
         }
       ]);
+      var ttl = m.root.querySelector('.modal-title');
+      ttl.classList.add('exp-title');
+      var tgl = UI.el('<label class="exp-mode"><input type="checkbox" checked>' +
+        '<span>Text only</span></label>');
+      var tglIn = tgl.querySelector('input');
+      tglIn.addEventListener('change', function () {
+        textOnly = tglIn.checked;
+        tgl.querySelector('span').textContent = textOnly ? 'Text only' : 'Detailed list';
+        prev.value = compose();
+      });
+      ttl.appendChild(tgl);
     });
   }
 
@@ -513,8 +548,8 @@ Screens.discipline = (function () {
               }
             }
             if (c.id === 'tomorrow') {
-              /* v0.54: earliest start time first (most are 08:00) */
-              var at3 = a.startTime || '08:00', bt3 = b.startTime || '08:00';
+              /* v0.54: earliest start time first; v0.68: untimed sink last */
+              var at3 = a.startTime || '99:99', bt3 = b.startTime || '99:99';
               if (at3 !== bt3) return at3 < bt3 ? -1 : 1;
             }
             return (a.order || a.createdAt || 0) - (b.order || b.createdAt || 0);
@@ -530,6 +565,18 @@ Screens.discipline = (function () {
           if (c.color) st.style.color = c.color;
           wrap.appendChild(st);
           var zone = UI.el('<div class="list td-zone" data-cat="' + c.id + '"></div>');
+          /* v0.70 (Alef): subtasks flagged with → surface in TODAY as
+             dummy entries (virtual — nothing moves; Vault excluded,
+             finished parents keep their subs to themselves) */
+          var subDums = [];
+          if (c.id === 'today') {
+            rows.forEach(function (pt) {
+              if ((pt.cat || 'today') === 'vault' || pt.done) return;
+              (pt.subs || []).forEach(function (s) {
+                if (s.today) subDums.push({ p: pt, s: s });
+              });
+            });
+          }
           var gInCat = ghosts.filter(function (g) {
             var d = g.data || {};
             var home = d.cat || 'today';
@@ -539,7 +586,7 @@ Screens.discipline = (function () {
             if (c.id === 'today') return d.now || home === 'today';
             return !d.now && home === c.id;
           });
-          if (!inCat.length && !gInCat.length) {
+          if (!inCat.length && !gInCat.length && !subDums.length) {
             /* v0.32: tappable empty row — one touch opens quick-add with
                THIS list preselected (v0.34: looks like the plain old
                "empty" label again, per Alef) */
@@ -548,7 +595,16 @@ Screens.discipline = (function () {
             emptyBtn.addEventListener('click', function () { quickAdd(c.id); });
             zone.appendChild(emptyBtn);
           }
-          inCat.forEach(function (t) { zone.appendChild(taskRow(t, showTags)); });
+          /* v0.70: dummy subtask rows slot in like real tasks — undone
+             ones after the undone tasks, done ones at the very bottom */
+          inCat.filter(function (t) { return !t.done; })
+            .forEach(function (t) { zone.appendChild(taskRow(t, showTags)); });
+          subDums.filter(function (d) { return !d.s.done; })
+            .forEach(function (d) { zone.appendChild(subDumRow(d.p, d.s)); });
+          inCat.filter(function (t) { return t.done; })
+            .forEach(function (t) { zone.appendChild(taskRow(t, showTags)); });
+          subDums.filter(function (d) { return d.s.done; })
+            .forEach(function (d) { zone.appendChild(subDumRow(d.p, d.s)); });
           gInCat.forEach(function (g) {
             var gr = UI.el('<div class="list-item todo-item td-ghost"><input type="checkbox" disabled>' +
               '<span class="li-main"><span class="li-title">' + UI.esc((g.data && g.data.title) || '(draft)') + ' <span class="td-ghostmark">⏳ ' + (g.status === 'sent' ? 'sent' : 'draft') + '</span></span></span></div>');
@@ -698,7 +754,7 @@ Screens.discipline = (function () {
       var marks = '';
       if (!t.done && t.startDate) {
         /* v0.50: scheduled start — dd/mm chip until the date arrives */
-        marks += ' <span class="td-hrmark" title="Starts ' + UI.esc(t.startDate + ' ' + (t.startTime || '08:00')) + '">' +
+        marks += ' <span class="td-hrmark" title="Starts ' + UI.esc(t.startDate + (t.startTime ? ' ' + t.startTime : '')) + '">' +
           UI.esc(t.startDate.slice(8, 10) + '/' + t.startDate.slice(5, 7)) + '</span>';
       } else if (!t.done && t.nowAt && !t.now) {
         var hLbl = /^\d\d:00$/.test(t.nowAt) ? t.nowAt.slice(0, 2) : t.nowAt;
@@ -730,7 +786,7 @@ Screens.discipline = (function () {
             /* v0.50: a finished Habit (🌱) plants tomorrow's copy */
             if (checked && t.prio === 'low') {
               return DB.regenHabit(t).then(function (c) {
-                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow 08:00');
+                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow' + (c.startTime ? ' ' + c.startTime : ''));
               });
             }
           }).then(draw);
@@ -864,6 +920,31 @@ Screens.discipline = (function () {
       return item;
     }
 
+    /* v0.70 (Alef): a flagged subtask's DUMMY row in TODAY. The checkbox
+       finishes the real subtask on its parent; tapping the row opens the
+       parent's sheet (where the → flag is managed). No drag, no ✕ — the
+       dummy disappears when the subtask is unflagged or deleted. */
+    function subDumRow(p, s) {
+      /* v0.70 (Alef): the parent tag shows only the FIRST WORD — text up
+         to the first space ("ทริปพม่า รอต้น" → "ทริปพม่า"); the full title
+         stays in the tooltip. */
+      var pTag = String(p.title || '').trim().split(/\s+/)[0] || '';
+      var item = UI.el('<div class="list-item todo-item td-subdum' + (s.done ? ' li-done' : '') + '">' +
+        '<input type="checkbox"' + (s.done ? ' checked' : '') + '>' +
+        '<span class="li-main"><span class="li-title">' + UI.esc(s.title) +
+        ' <span class="td-dummark" title="Subtask of: ' + UI.esc(p.title) + '">↳ ' +
+        UI.esc(pTag) + '</span></span></span></div>');
+      item.querySelector('input').addEventListener('change', function (e) {
+        var live = (p.subs || []).filter(function (x) { return x.id === s.id; })[0];
+        if (live) live.done = e.target.checked;
+        DB.put('todos', p).then(draw);
+      });
+      item.querySelector('.li-main').addEventListener('click', function () {
+        taskSheet(p, cats, draw);
+      });
+      return item;
+    }
+
     /* quick add: category chips + "I want to..." input, keyboard-ready.
        v0.32: optional presetCat preselects a list (tap on an empty list). */
     function quickAdd(presetCat) {
@@ -910,15 +991,16 @@ Screens.discipline = (function () {
         var v = p.querySelector('.qa-input').value.trim();
         if (!v) return;
         /* v0.50: a DDMMYY token in the title schedules the start date.
-           v0.54: adding straight into TOMORROW schedules tomorrow 08:00. */
+           v0.54: adding straight into TOMORROW schedules tomorrow
+           (v0.68: untimed — no auto-Now until the user picks a time). */
         var tok = parseStartToken(v);
-        if (tok) UI.toast('Starts ' + tok.date + ' 08:00');
+        if (tok) UI.toast('Starts ' + tok.date);
         var tomQ = selCat === 'tomorrow' ? tomorrowISO() : null;
         var sd = tok ? tok.date : tomQ;
         DB.put('todos', {
           id: DB.uid(), title: tok ? tok.title : v, cat: tomQ ? 'later' : selCat, now: (tok || tomQ) ? false : nowOn,
           prio: 'none', tags: [], subs: [], note: '',
-          startDate: sd, startTime: sd ? '08:00' : null,
+          startDate: sd, startTime: null,   /* v0.68: untimed unless chosen */
           done: false, dueDate: null, time: null, allDay: false, createdAt: Date.now()
         }).then(function () {
           p.querySelector('.qa-input').value = '';
@@ -2243,11 +2325,22 @@ Screens.discipline = (function () {
         (p[0] === 'low' ? '🌱' : '') + '</button>'; /* v0.50: Habit sprout */
     }).join('') + '</div>');
     var prioVal = UI.el('<b id="td-prio-name"></b>');
+    /* v0.68 (Alef): optional RENEW TIME for a Habit — the replanted copy
+       starts at this time (→ auto-Now); left empty it enters TODAY
+       untimed and never auto-flips to Now. */
+    var habitIn = UI.el('<input type="time" class="td-habit-time" ' +
+      'title="Habit renew time (optional — empty: enters Today untimed)" ' +
+      'value="' + UI.esc(t.habitTime || '') + '">');
+    habitIn.addEventListener('change', function () {
+      dirt();
+      t.habitTime = habitIn.value || null;
+    });
     function setPrioLabel() {
       var cur = TD_PRIOS.filter(function (x) { return x[0] === (t.prio || 'none'); })[0] || TD_PRIOS[5];
       /* v0.50: Habit shows its repetition count (🌱 grows toward 25 / 100) */
       prioVal.textContent = cur[1] + (cur[0] === 'low' && t.habitCount ? ' ×' + t.habitCount : '');
       prioVal.className = 'td-prio-val td-pv-' + cur[2];
+      habitIn.hidden = (t.prio || 'none') !== 'low';   /* v0.68 */
     }
     setPrioLabel();
     badges.addEventListener('click', function (e) {
@@ -2273,6 +2366,7 @@ Screens.discipline = (function () {
     });
     prioRow.appendChild(badges);
     prioRow.appendChild(prioVal);
+    prioRow.appendChild(habitIn);   /* v0.68: shown only while prio = Habit */
     /* v0.56: the Vault detail is an INFO page (Alef stores developed
        information there) — Priority and Tags fold shut by default, a
        small header taps them open. Other lists keep the rows visible. */
@@ -2326,12 +2420,12 @@ Screens.discipline = (function () {
            task moves to TODAY; date+time reached → it becomes NOW. With no
            date set, the time box is the old same-day "becomes Now at". */
         var dateIn = UI.el('<input type="date" class="td-startd" title="Start date" value="' + UI.esc(t.startDate || '') + '">');
-        var nowAtIn = UI.el('<input type="time" class="td-nowat" title="' + (t.startDate ? 'Start time' : 'Becomes Now at this time') + '" value="' + UI.esc(t.startDate ? (t.startTime || '08:00') : (t.nowAt || '')) + '">');
+        var nowAtIn = UI.el('<input type="time" class="td-nowat" title="' + (t.startDate ? 'Start time (optional)' : 'Becomes Now at this time') + '" value="' + UI.esc(t.startDate ? (t.startTime || '') : (t.nowAt || '')) + '">');
         dateIn.addEventListener('change', function () {
           _schedTouched = true;
           if (dateIn.value) {
             t.startDate = dateIn.value;
-            t.startTime = nowAtIn.value || '08:00';
+            t.startTime = nowAtIn.value || null;   /* v0.68: time is optional */
             t.now = false;
             t.nowAt = null;
           } else {
@@ -2344,7 +2438,7 @@ Screens.discipline = (function () {
         nowAtIn.addEventListener('change', function () {
           _schedTouched = true;
           if (t.startDate) {
-            t.startTime = nowAtIn.value || '08:00';
+            t.startTime = nowAtIn.value || null;   /* v0.68: cleared = untimed */
           } else {
             t.nowAt = nowAtIn.value || null;
             if (t.nowAt) t.now = false;
@@ -2392,12 +2486,27 @@ Screens.discipline = (function () {
       var listEl = subsWrap.querySelector('.td-sub-list');
       listEl.innerHTML = '';
       t.subs.forEach(function (sub, i) {
+        /* v0.70 (Alef): green → in the ✕ slot (undone subtasks, Vault
+           excluded) flags the subtask to appear in TODAY as a dummy
+           entry — the subtask itself stays right here. */
         var row = UI.el('<div class="td-sub-row"><input type="checkbox"' + (sub.done ? ' checked' : '') + '>' +
           '<span class="td-sub-title' + (sub.done ? ' done' : '') + '">' + UI.esc(sub.title) + '</span>' +
-          (sub.done ? '<button class="td-del td-del-sm" aria-label="remove subtask">✕</button>' : '') + '</div>');
+          (sub.done ? '<button class="td-del td-del-sm" aria-label="remove subtask">✕</button>'
+            : (t.cat !== 'vault'
+              ? '<button class="td-sub-today' + (sub.today ? ' on' : '') +
+                '" aria-label="show this subtask in Today">→</button>' : '')) +
+          '</div>');
         row.querySelector('input').addEventListener('change', function (e) {
           sub.done = e.target.checked;
           dirt();
+          drawSubs();
+        });
+        var subToday = row.querySelector('.td-sub-today');
+        if (subToday) subToday.addEventListener('click', function () {
+          sub.today = !sub.today;
+          if (!sub.today) delete sub.today;
+          dirt();
+          UI.toast(sub.today ? 'Shows in TODAY ✓ (after save)' : 'Removed from TODAY');
           drawSubs();
         });
         row.querySelector('.td-sub-title').addEventListener('click', function () {
@@ -2585,10 +2694,9 @@ Screens.discipline = (function () {
         name = tok.title;
         _schedTouched = true;
         t.startDate = tok.date;
-        t.startTime = t.startTime || '08:00';
         t.now = false;
         t.nowAt = null;
-        UI.toast('Starts ' + tok.date + ' ' + t.startTime);
+        UI.toast('Starts ' + tok.date + (t.startTime ? ' ' + t.startTime : ''));
       }
       t.title = name;
       t.note = noteIn.value;
@@ -3086,7 +3194,7 @@ Screens.discipline = (function () {
         wrap.appendChild(UI.el('<div class="sub td-moment-prog">' + (i + 1) + ' / ' + total + '</div>'));
         wrap.appendChild(UI.el('<div class="card td-moment"><h2>' + UI.esc(t.title) + '</h2>' +
           (t.note ? '<div class="sub">' + UI.esc(t.note) + '</div>' : '') +
-          (t.startDate ? '<div class="sub">⏭ starts ' + UI.esc(t.startDate + ' ' + (t.startTime || '08:00')) + '</div>' : '') +
+          (t.startDate ? '<div class="sub">⏭ starts ' + UI.esc(t.startDate + (t.startTime ? ' ' + t.startTime : '')) + '</div>' : '') +
           '</div>'));
 
         /* section 1: Now toggle + Next */
@@ -3155,7 +3263,7 @@ Screens.discipline = (function () {
             /* v0.50: a finished Habit (🌱) plants tomorrow's copy */
             if (t.prio === 'low') {
               return DB.regenHabit(t).then(function (c) {
-                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow 08:00');
+                if (c) UI.toast('🌱 Habit ×' + c.habitCount + ' — planted for tomorrow' + (c.startTime ? ' ' + c.startTime : ''));
               });
             }
           }).then(function () { i++; show(); });
@@ -3769,7 +3877,8 @@ Screens.discipline = (function () {
      New entries prefill with the last session's numbers. */
 
   return { render: render, TIMED_ALERTS: TIMED_ALERTS, ALLDAY_ALERTS: ALLDAY_ALERTS,
-    _fmtTaskText: fmtTaskText, _buildTodoExport: buildTodoExport,
+    _fmtTaskText: fmtTaskText, _fmtTaskTextPlain: fmtTaskTextPlain,
+    _buildTodoExport: buildTodoExport,
     _tomorrowISO: tomorrowISO, _tdMovePlan: tdMovePlan,
     _thumbFromVideoBuf: thumbFromVideoBuf, _mkThumb: MK_THUMB,
     _mvReorder: mvReorder };
