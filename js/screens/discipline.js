@@ -461,12 +461,19 @@ Screens.discipline = (function () {
     }
 
     function draw() {
-      wrap.innerHTML = '';
+      /* v0.72 (Alef's report): the old synchronous wrap.innerHTML = ''
+         collapsed the page to ~1 screen while the data loaded, so the
+         browser clamped the window scroll to the top on every ✕ / tick.
+         Now the old rows stay put until the new ones are ready, and the
+         scroll position is put back after the swap. */
+      var scEl = document.scrollingElement || document.documentElement;
+      var keepY = scEl.scrollTop;
       /* v0.40: hour-tagged tasks whose time has passed flip to Now on every
          list draw, not only at app boot (promoteNowDue no-ops on the PC) */
       DB.promoteNowDue().then(function () {
         return Promise.all([DB.getTodoCats(), DB.all('todos'), DB.byIndex('tags', 'module', 'todo'), DB.all('proposals')]);
       }).then(function (res) {
+        wrap.innerHTML = '';   /* v0.72: cleared HERE, in the same tick as the rebuild */
         /* Vault: fixed private list injected after PROJECT (not part of the
            editable/synced list order). S26 only — hidden on the PC so the
            private data has exactly one home. */
@@ -613,6 +620,7 @@ Screens.discipline = (function () {
           });
           wrap.appendChild(zone);
         });
+        if (scEl.scrollTop !== keepY) scEl.scrollTop = keepY;   /* v0.72 */
       });
     }
 
@@ -927,17 +935,35 @@ Screens.discipline = (function () {
     function subDumRow(p, s) {
       /* v0.70 (Alef): the parent tag shows only the FIRST WORD — text up
          to the first space ("ทริปพม่า รอต้น" → "ทริปพม่า"); the full title
-         stays in the tooltip. */
+         stays in the tooltip.
+         v0.72 (Alef's report): a FINISHED dummy gets the same small ✕ as a
+         finished task — it removes the dummy from TODAY (clears the flag;
+         the subtask itself stays done on its parent). Without the ✕ the
+         strike line ran past the screen edge and there was nothing to tap. */
       var pTag = String(p.title || '').trim().split(/\s+/)[0] || '';
       var item = UI.el('<div class="list-item todo-item td-subdum' + (s.done ? ' li-done' : '') + '">' +
         '<input type="checkbox"' + (s.done ? ' checked' : '') + '>' +
         '<span class="li-main"><span class="li-title">' + UI.esc(s.title) +
         ' <span class="td-dummark" title="Subtask of: ' + UI.esc(p.title) + '">↳ ' +
-        UI.esc(pTag) + '</span></span></span></div>');
+        UI.esc(pTag) + '</span></span></span>' +
+        (s.done ? '<button class="td-del" aria-label="remove from Today">✕</button>' : '') +
+        '</div>');
+      function liveSub() {
+        return (p.subs || []).filter(function (x) { return x.id === s.id; })[0];
+      }
       item.querySelector('input').addEventListener('change', function (e) {
-        var live = (p.subs || []).filter(function (x) { return x.id === s.id; })[0];
+        var live = liveSub();
         if (live) live.done = e.target.checked;
         DB.put('todos', p).then(draw);
+      });
+      var dumDel = item.querySelector('.td-del');
+      if (dumDel) dumDel.addEventListener('click', function () {
+        var live = liveSub();
+        if (live) delete live.today;
+        DB.put('todos', p).then(function () {
+          UI.toast('Removed from TODAY');
+          draw();
+        });
       });
       item.querySelector('.li-main').addEventListener('click', function () {
         taskSheet(p, cats, draw);
