@@ -48,7 +48,9 @@ html[data-theme="dark"] {
 
 /* ---- base ---- */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { font-size: 16px; }
+/* overscroll-behavior must sit on <html>: Chromium 140+ reads the viewport's
+   value from the root element only (the body copy below serves older ones). */
+html { font-size: 16px; overscroll-behavior-y: none; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;

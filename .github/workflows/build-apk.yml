@@ -24,6 +24,7 @@ jobs:
           mkdir -p www
           rsync -a --delete --exclude=native --exclude=.github --exclude=.git ../ www/
           npx cap add android
+          cp MainActivity.java android/app/src/main/java/fit/alef/app/MainActivity.java
           npx cap sync android
           V=$(grep -o "APP_VERSION = '[^']*'" www/js/app.js | cut -d"'" -f2)
           sed -i "s/versionName \"1.0\"/versionName \"$V\"/" android/app/build/../build.gradle 2>/dev/null || true
